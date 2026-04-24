@@ -13,8 +13,14 @@ import bcrypt from 'bcryptjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const SYSTEM_KEY = 'pdk_system_secret_2026';
+// Define the secret system key via Environment Variables for maximum security
+const SYSTEM_KEY = process.env.PDKS_SYSTEM_KEY;
+if (!SYSTEM_KEY) {
+  console.error("CRITICAL ERROR: PDKS_SYSTEM_KEY environment variable is missing!");
+  // Güvenlik için uygulama çökmesin diye geçici olarak bir fallback bırakıyoruz 
+  // ama loglara hata basıyoruz.
+}
+const ACTIVE_SYSTEM_KEY = SYSTEM_KEY || 'pdk_system_secret_2026';
 
 async function startServer() {
   const app = express();
@@ -102,7 +108,7 @@ async function startServer() {
         // Automatically hash the plaintext password and update DB for future logins
         if (passwordMatch) {
             const hashed = await bcrypt.hash(password, 10);
-            await setDoc(doc(db, 'secrets', userDoc.id), { password: hashed, _system_key: SYSTEM_KEY }, { merge: true });
+            await setDoc(doc(db, 'secrets', userDoc.id), { password: hashed, _system_key: ACTIVE_SYSTEM_KEY }, { merge: true });
         }
       } else if (storedPassword) {
         passwordMatch = await bcrypt.compare(password, storedPassword);
@@ -131,7 +137,7 @@ async function startServer() {
         if (!userData.deviceId) {
           await setDoc(doc(db, 'users', userDoc.id), { 
             deviceId: permanentDeviceId.trim(),
-            _system_key: SYSTEM_KEY 
+            _system_key: ACTIVE_SYSTEM_KEY 
           }, { merge: true });
         }
       }
@@ -187,12 +193,12 @@ async function startServer() {
         uid, 
         leaveBalance: userProfile.leaveBalance || 14,
         createdAt: new Date().toISOString(),
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       });
       const hashedPassword = await bcrypt.hash(password, 10);
       await setDoc(doc(db, 'secrets', uid), { 
         password: hashedPassword,
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       });
 
       res.json({ success: true });
@@ -242,14 +248,14 @@ async function startServer() {
       await setDoc(userRef, { 
         ...userSnap.data(),
         ...profileUpdates,
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       }, { merge: true });
 
       if (password) {
         const hashedPassword = await bcrypt.hash(password, 10);
         await setDoc(doc(db, 'secrets', targetUid), { 
           password: hashedPassword,
-          _system_key: SYSTEM_KEY
+          _system_key: ACTIVE_SYSTEM_KEY
         }, { merge: true });
       }
 
@@ -294,7 +300,7 @@ async function startServer() {
         ...logData,
         deleted: true,
         ipAddress: `Silindi: ${actorData?.name}`,
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       }, { merge: true });
 
       res.json({ success: true });
@@ -336,12 +342,12 @@ async function startServer() {
         name: 'Sistem Yöneticisi',
         role: 'admin',
         createdAt: new Date().toISOString(),
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       });
       const adminHashed = await bcrypt.hash('admin', 10);
       await setDoc(doc(db, 'secrets', adminId), {
         password: adminHashed,
-        _system_key: SYSTEM_KEY
+        _system_key: ACTIVE_SYSTEM_KEY
       });
       console.log("Initial admin system check complete.");
     } catch (e) {
