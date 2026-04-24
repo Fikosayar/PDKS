@@ -33,7 +33,6 @@ COPY --from=builder /app/dist ./dist
 
 # Arkayüz dosyalarını ve yapılandırmayı kopyala
 COPY --from=builder /app/server.ts ./
-COPY --from=builder /app/firebase-applet-config.json ./
 
 EXPOSE 3000
 
