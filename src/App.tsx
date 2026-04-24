@@ -32,7 +32,6 @@ import { auth, db, storage } from './lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { UserProfile, AttendanceLog, GlobalSettings, LeaveRequest, OvertimeRequest, SystemNotification } from './types';
 import { cn } from './lib/utils';
-import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import { 
   LogOut, 
   LogIn, 
@@ -118,19 +117,6 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
-
-  const [fingerprint, setFingerprint] = useState<string | null>(null);
-
-  // Initialize FingerprintJS
-  useEffect(() => {
-    const setFp = async () => {
-      const fpPromise = FingerprintJS.load();
-      const fp = await fpPromise;
-      const result = await fp.get();
-      setFingerprint(result.visitorId);
-    };
-    setFp();
-  }, []);
 
   const getEffectiveLeaveBalance = (u: UserProfile | null) => {
     if (!u) return 0;
@@ -468,7 +454,7 @@ export default function App() {
           personnelId, 
           password,
           deviceInfo: navigator.userAgent,
-          permanentDeviceId: fingerprint || getOrCreateDeviceId()
+          permanentDeviceId: getOrCreateDeviceId()
         })
       });
 
