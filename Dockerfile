@@ -34,6 +34,7 @@ COPY --from=builder /app/dist ./dist
 # Arkayüz dosyalarını ve yapılandırmayı kopyala
 COPY --from=builder /app/server.ts ./
 
+ENV NODE_ENV=production
 EXPOSE 3000
 
 # Sunucuyu başlat
