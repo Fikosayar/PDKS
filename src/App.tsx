@@ -3471,6 +3471,11 @@ export default function App() {
                           </div>
                         </div>
                         {req.remoteNote && <p className="text-xs text-zinc-400 italic">"{req.remoteNote}"</p>}
+                        {req.location && (
+                          <a href={`https://www.google.com/maps?q=${req.location.latitude},${req.location.longitude}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-500 hover:text-blue-400">
+                            <MapPin size={12} /> Konumu Haritada Gör
+                          </a>
+                        )}
                         <div className="flex gap-2 pt-2">
                           <button onClick={() => handleRequestAction('attendance', req.id!, 'approved')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Check size={14} /> Onayla</button>
                           <button onClick={() => handleRequestAction('attendance', req.id!, 'rejected')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-red-600 py-2 text-xs font-bold text-white hover:bg-red-500"><X size={14} /> Reddet</button>
@@ -4570,7 +4575,7 @@ export default function App() {
 
                           const newDocRef = await addDoc(collection(db, 'attendance'), {
                             ...logPayload,
-                            timestamp: serverTimestamp(),
+                            timestamp: clientNow, // Kullanıcının girdiği saat
                           });
 
                           // Optimistik UI
