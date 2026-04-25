@@ -10,6 +10,7 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, query, where, limit, getDocs, doc, getDoc, setDoc, addDoc } from 'firebase/firestore';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import webpush from 'web-push';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +22,35 @@ if (!SYSTEM_KEY) {
   // ama loglara hata basıyoruz.
 }
 const ACTIVE_SYSTEM_KEY = SYSTEM_KEY || 'pdk_system_secret_2026';
+
+// VAPID Ayarları (Push Notifications)
+const VAPID_PUBLIC_KEY = 'BOPBnKZxgQDkPI2W4reXfIxX4JvL_fmvxEStJMCwZ5VR8OCWongeK167qF3ag0_Liq0CkxvKpGM307hbTr3gJtY';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'EfwIsNpBa3Q3Mcs1iPT9W6rz6avexMjw7QWXNMUh_iY';
+webpush.setVapidDetails(
+  'mailto:admin@pdks.app',
+  VAPID_PUBLIC_KEY,
+  VAPID_PRIVATE_KEY
+);
+
+// Push bildirim gönderme yardımcı fonksiyonu
+async function sendPushToUser(db: any, userId: string, title: string, body: string, link: string = '/') {
+  try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    if (!userSnap.exists()) return;
+    const userData = userSnap.data();
+    if (!userData.pushSubscription) return;
+    
+    const subscription = JSON.parse(userData.pushSubscription);
+    const payload = JSON.stringify({ title, body, link });
+    await webpush.sendNotification(subscription, payload);
+  } catch (err: any) {
+    // 410 Gone = Abonelik geçersiz, temizle
+    if (err.statusCode === 410) {
+      await setDoc(doc(db, 'users', userId), { pushSubscription: null }, { merge: true });
+    }
+    console.warn(`Push gönderilemedi (${userId}):`, err.message);
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -307,6 +337,126 @@ async function startServer() {
     } catch (error) {
       console.error("Delete log error:", error);
       res.status(500).json({ error: 'Sistem hatası' });
+    }
+  });
+
+  // Push abonelik kaydetme
+  app.post('/api/push/subscribe', async (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not ready' });
+    const { uid, subscription } = req.body;
+    if (!uid || !subscription) return res.status(400).json({ error: 'Eksik parametre' });
+    try {
+      await setDoc(doc(db, 'users', uid), {
+        pushSubscription: JSON.stringify(subscription)
+      }, { merge: true });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Kaydedilemedi' });
+    }
+  });
+
+  // Push bildirimi gönderme (admin/manager trigger)
+  app.post('/api/push/send', async (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not ready' });
+    const { actorUid, targetUid, title, body, link } = req.body;
+    try {
+      // Sadece admin veya manager gönderebilir
+      const actorSnap = await getDoc(doc(db, 'users', actorUid));
+      if (!actorSnap.exists()) return res.status(403).json({ error: 'Yetkisiz' });
+      
+      await sendPushToUser(db, targetUid, title, body, link || '/');
+      
+      // Firebase'e bildirim kaydı da ekle
+      await addDoc(collection(db, 'notifications'), {
+        userId: targetUid,
+        title,
+        message: body,
+        type: 'info',
+        read: false,
+        link: link || '/',
+        createdAt: new Date().toISOString()
+      });
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Onay/Red bildirimlerini otomatik push olarak gönder
+  app.post('/api/notify/approval', async (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not ready' });
+    const { targetUid, isApproved, requestType, actorName } = req.body;
+    const statusText = isApproved ? 'Onaylandı ✅' : 'Reddedildi ❌';
+    const typeText = requestType === 'leave' ? 'İzin Talebi' : 'Mesai Talebi';
+    const title = `${typeText} ${statusText}`;
+    const body = `${actorName} tarafından ${isApproved ? 'onaylanmıştır' : 'reddedilmiştir'}.`;
+    const link = requestType === 'leave' ? '/izinler' : '/mesai';
+    
+    try {
+      await sendPushToUser(db, targetUid, title, body, link);
+      await addDoc(collection(db, 'notifications'), {
+        userId: targetUid,
+        title,
+        message: body,
+        type: isApproved ? 'success' : 'error',
+        read: false,
+        link,
+        createdAt: new Date().toISOString()
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Giriş bildirimi yöneticiye gönder
+  app.post('/api/notify/checkin', async (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not ready' });
+    const { userId, userName, type, isRemote, remoteNote } = req.body;
+    try {
+      const userSnap = await getDoc(doc(db, 'users', userId));
+      if (!userSnap.exists()) return res.json({ success: false });
+      const managerId = userSnap.data()?.managerId;
+      if (!managerId) return res.json({ success: false });
+      
+      const typeText = type === 'in' ? 'Giriş' : 'Çıkış';
+      const remoteText = isRemote ? ' (Nakliye/Uzaktan)' : '';
+      const title = `${userName} - ${typeText} Hareketi${remoteText}`;
+      const body = isRemote && remoteNote 
+        ? `Not: ${remoteNote}` 
+        : `${new Date().toLocaleTimeString('tr-TR')} saatinde ${typeText.toLowerCase()} yaptı.`;
+      
+      await sendPushToUser(db, managerId, title, body, '/hareketler');
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Yeni talep bildirimi yöneticiye gönder  
+  app.post('/api/notify/newrequest', async (req, res) => {
+    if (!db) return res.status(500).json({ error: 'Database not ready' });
+    const { userId, userName, requestType, managerId } = req.body;
+    const typeText = requestType === 'leave' ? 'İzin' : 'Mesai';
+    const title = `Yeni ${typeText} Talebi`;
+    const body = `${userName} yeni bir ${typeText.toLowerCase()} talebi oluşturdu.`;
+    const link = requestType === 'leave' ? '/izinler' : '/mesai';
+    
+    try {
+      await sendPushToUser(db, managerId, title, body, link);
+      await addDoc(collection(db, 'notifications'), {
+        userId: managerId,
+        title,
+        message: body,
+        type: 'info',
+        read: false,
+        link,
+        createdAt: new Date().toISOString()
+      });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 

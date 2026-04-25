@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   GoogleAuthProvider, 
   signInWithPopup, 
@@ -30,7 +30,9 @@ import {
 } from 'firebase/firestore';
 import { auth, db, storage } from './lib/firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { UserProfile, AttendanceLog, GlobalSettings, LeaveRequest, OvertimeRequest, SystemNotification } from './types';
+import { UserProfile, AttendanceLog, GlobalSettings, LeaveRequest, OvertimeRequest, SystemNotification, RoleDefinition, OfflineQueueItem } from './types';
+import { subscribeToPush, requestNotificationPermission, showLocalNotification, VAPID_PUBLIC_KEY } from './lib/pushNotifications';
+import { addToOfflineQueue, getOfflineQueue, removeFromOfflineQueue } from './lib/offlineQueue';
 import { cn } from './lib/utils';
 import { 
   LogOut, 
@@ -45,6 +47,7 @@ import {
   Clock,
   QrCode,
   Wifi,
+  WifiOff,
   Users,
   Trash2,
   Plus,
@@ -64,7 +67,9 @@ import {
   ShieldAlert,
   AlertCircle,
   Bell,
-  Info
+  Info,
+  Truck,
+  Navigation
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
@@ -117,6 +122,19 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+
+  // Çevrimdışı mod
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0);
+
+  // Nakliye (uzaktan giriş) modu
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
+  const [remoteNote, setRemoteNote] = useState('');
+  const [pendingScanType, setPendingScanType] = useState<'in' | 'out' | null>(null);
+
+  // Push bildirim durumu
+  const [pushEnabled, setPushEnabled] = useState(false);
+
 
   const getEffectiveLeaveBalance = (u: UserProfile | null) => {
     if (!u) return 0;
@@ -319,14 +337,26 @@ export default function App() {
     return unsubscribe;
   }, [user]);
 
-  // Logs listener
+  // Logs listener — Admin: tüm veriler | Manager: kendi + ekibinin | Personel: sadece kendi
   useEffect(() => {
     if (!user || !profile) return;
     
     let q;
     if (profile.role === 'admin') {
       q = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(1000));
+    } else if (profile.managerId || allUsers.some(u => u.managerId === user.uid)) {
+      // Manager: kendi hareketleri + ekibinin hareketleri
+      q = query(
+        collection(db, 'attendance'),
+        or(
+          where('userId', '==', user.uid),
+          where('userId', 'in', allUsers.filter(u => u.managerId === user.uid).map(u => u.uid).concat([user.uid]).slice(0, 10))
+        ),
+        orderBy('timestamp', 'desc'),
+        limit(500)
+      );
     } else {
+      // Normal personel: sadece kendi verilerini görür
       q = query(collection(db, 'attendance'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'), limit(200));
     }
 
@@ -340,7 +370,7 @@ export default function App() {
       setLogs(newLogs);
     });
     return unsubscribe;
-  }, [user, profile]);
+  }, [user, profile, allUsers]);
 
   // Users listener (Admin and Managers)
   useEffect(() => {
@@ -380,6 +410,65 @@ export default function App() {
     return unsubscribe;
   }, [user]);
 
+  // İnternet bağlantı takibi
+  useEffect(() => {
+    const handleOnline = async () => {
+      setIsOnline(true);
+      // İnternet gelince çevrimdışı kuyruğu senkronize et
+      await syncOfflineQueueToFirebase();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user, profile]);
+
+  // SW mesajlarını dinle (bildirim tıklaması yönlendirmesi)
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'NAVIGATE' && event.data.link) {
+        navigate(event.data.link);
+      }
+      if (event.data?.type === 'SYNC_OFFLINE_QUEUE') {
+        syncOfflineQueueToFirebase();
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handler);
+    return () => navigator.serviceWorker.removeEventListener('message', handler);
+  }, [user, profile]);
+
+  // Kullanıcı giriş yaptıktan sonra push aboneliği kur
+  useEffect(() => {
+    if (!user) return;
+    const setupPush = async () => {
+      const granted = await requestNotificationPermission();
+      if (granted) {
+        const sub = await subscribeToPush();
+        if (sub) {
+          setPushEnabled(true);
+          // Aboneliği sunucuya kaydet
+          await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: user.uid, subscription: sub })
+          });
+        }
+      }
+    };
+    setupPush();
+  }, [user]);
+
+  // Çevrimdışı kuyruk sayısını güncelle
+  useEffect(() => {
+    getOfflineQueue().then(q => setOfflineQueueCount(q.length));
+  }, [user]);
+
+
+
   const markNotificationRead = async (id: string) => {
     try {
       await updateDoc(doc(db, 'notifications', id), { read: true });
@@ -387,8 +476,36 @@ export default function App() {
       console.error("Mark read error:", e);
     }
   };
+  // Çevrimdışı kuyruğu Firebase'e senkronize et
+  const syncOfflineQueueToFirebase = useCallback(async () => {
+    if (!user || !profile) return;
+    const queue = await getOfflineQueue();
+    if (queue.length === 0) return;
+    
+    let syncedCount = 0;
+    for (const item of queue) {
+      try {
+        const { clientTimestamp, ...payload } = item.payload;
+        await addDoc(collection(db, 'attendance'), {
+          ...payload,
+          timestamp: serverTimestamp(),
+          offlineQueued: true,
+          clientTimestamp
+        });
+        await removeFromOfflineQueue(item.id);
+        syncedCount++;
+      } catch (err) {
+        console.error('Çevrimdışı kayıt senkronize edilemedi:', err);
+      }
+    }
+    if (syncedCount > 0) {
+      setOfflineQueueCount(0);
+      setStatus({ type: 'success', message: `${syncedCount} çevrimdışı hareket başarıyla senkronize edildi!` });
+    }
+  }, [user, profile]);
 
   // Leave Requests listener
+
   useEffect(() => {
     if (!user || !profile) return;
     
@@ -576,6 +693,7 @@ export default function App() {
     const birthDate = formData.get('birthDate') as string;
     const allowedDevice = formData.get('allowedDevice') as string;
     const deviceId = formData.get('deviceId') as string;
+    const canRemoteCheckIn = formData.get('canRemoteCheckIn') === 'true';
 
     try {
       const response = await fetch('/api/users', {
@@ -583,7 +701,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           adminUid: profile.uid,
-          newUser: { name, title, personnelId, password, role, managerId, leaveBalance, startDate, birthDate, allowedDevice, deviceId }
+          newUser: { name, title, personnelId, password, role, managerId, leaveBalance, startDate, birthDate, allowedDevice, deviceId, canRemoteCheckIn }
         })
       });
 
@@ -694,8 +812,9 @@ export default function App() {
         return;
       }
 
-      // 2. IP Check
-      if (settings.officeIp && currentIp !== settings.officeIp) {
+      // 2. IP Check (Nakliye yetkisi olan personel için IP kontrolü atla)
+      const hasRemotePermission = profile.canRemoteCheckIn === true;
+      if (settings.officeIp && currentIp !== settings.officeIp && !hasRemotePermission) {
         await addDoc(collection(db, 'attendance'), {
           userId: user.uid,
           userName: profile.name,
@@ -710,7 +829,10 @@ export default function App() {
         return;
       }
 
-      // 3. Location (Optional but good)
+      // 3. Nakliye modunda mısın?
+      const isRemote = hasRemotePermission && settings.officeIp && currentIp !== settings.officeIp;
+
+      // 4. Konum al
       let location = undefined;
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
@@ -724,27 +846,60 @@ export default function App() {
         console.warn("Geolocation denied or failed");
       }
 
-      // 4. Save Log (Success)
-      const timestamp = new Date();
-      await addDoc(collection(db, 'attendance'), {
+      const logPayload: any = {
         userId: user.uid,
         userName: profile.name,
-        timestamp: serverTimestamp(),
         type: scanType,
         ipAddress: currentIp,
         location: location || null,
-        status: 'success'
-      });
-      
-      // Mükerrer koruma: Son başarılı okutma zamanını kaydet
-      lastScanTimestamp.current = Date.now();
-      
-      // Check for auto-overtime
-      if (scanType === 'out') {
-        await checkAndCreateAutoOvertime(user.uid, profile.name, timestamp, 'out');
+        status: 'success',
+        isRemote: !!isRemote,
+        remoteNote: isRemote ? (remoteNote || '') : null,
+      };
+
+      // 5. Çevrimdışı ise kuyruğa al, online ise direkt yaz
+      if (!isOnline) {
+        const queueItem: OfflineQueueItem = {
+          id: `offline-${Date.now()}-${Math.random().toString(36).substring(2)}`,
+          type: 'attendance',
+          payload: { ...logPayload, clientTimestamp: new Date().toISOString() },
+          createdAt: new Date().toISOString()
+        };
+        await addToOfflineQueue(queueItem);
+        const newCount = (await getOfflineQueue()).length;
+        setOfflineQueueCount(newCount);
+        setStatus({ type: 'success', message: `📵 İnternetsiz mod: ${scanType === 'in' ? 'Giriş' : 'Çıkış'} kaydedildi, internet gelince senkronize edilecek.` });
+      } else {
+        const timestamp = new Date();
+        await addDoc(collection(db, 'attendance'), {
+          ...logPayload,
+          timestamp: serverTimestamp(),
+        });
+
+        // Check for auto-overtime
+        if (scanType === 'out') {
+          await checkAndCreateAutoOvertime(user.uid, profile.name, timestamp, 'out');
+        }
+
+        // Yöneticiye giriş bildirimi gönder
+        fetch('/api/notify/checkin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: user.uid,
+            userName: profile.name,
+            type: scanType,
+            isRemote: !!isRemote,
+            remoteNote: remoteNote || ''
+          })
+        }).catch(() => {});
+
+        setStatus({ type: 'success', message: `${isRemote ? '🚛 Nakliye: ' : ''}${scanType === 'in' ? 'Giriş' : 'Çıkış'} işleminiz başarıyla kaydedildi.` });
       }
 
-      setStatus({ type: 'success', message: `${scanType === 'in' ? 'Giriş' : 'Çıkış'} işleminiz başarıyla kaydedildi.` });
+      // Mükerrer koruma: Son başarılı okutma zamanını kaydet
+      lastScanTimestamp.current = Date.now();
+      setRemoteNote('');
       setScanType(null);
     } catch (error) {
       console.error("Save log error:", error);
@@ -753,6 +908,7 @@ export default function App() {
       isProcessingScan.current = false;
     }
   };
+
 
   const updateSettings = async (e: any) => {
     e.preventDefault();
@@ -782,7 +938,6 @@ export default function App() {
       shiftStart: formData.get('shiftStart') as string || '09:00',
       shiftEnd: formData.get('shiftEnd') as string || '18:00',
       breakRules: breakRules,
-      _system_key: 'pdk_system_secret_2026'
     };
 
     try {
@@ -939,7 +1094,6 @@ export default function App() {
           type: manualLogType,
           ipAddress: auditInfo,
           status: 'success',
-          _system_key: 'pdk_system_secret_2026'
         });
         setStatus({ type: 'success', message: 'Kayıt güncellendi.' });
       } else {
@@ -950,7 +1104,6 @@ export default function App() {
           type: manualLogType,
           ipAddress: auditInfo,
           status: 'success',
-          _system_key: 'pdk_system_secret_2026'
         });
         setStatus({ type: 'success', message: 'Kayıt eklendi.' });
       }
@@ -1028,7 +1181,6 @@ export default function App() {
           description: `Otomatik Sistem Kaydı (${format(timestamp, 'HH:mm')} çıkış)`,
           status: 'pending',
           createdAt: serverTimestamp(),
-          _system_key: 'pdk_system_secret_2026'
         });
       } catch (error) {
         console.error("Auto overtime error:", error);
@@ -1099,6 +1251,17 @@ export default function App() {
         status: 'pending',
         createdAt: serverTimestamp(),
       });
+      // Yöneticiye push bildirimi gönder
+      fetch('/api/notify/newrequest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          userName: profile.name,
+          requestType: 'leave',
+          managerId: profile.managerId || 'admin_initial'
+        })
+      }).catch(() => {});
       setStatus({ type: 'success', message: leaveType === 'report' ? 'Raporunuz iletildi.' : 'İzin talebiniz iletildi.' });
       (e.target as HTMLFormElement).reset();
       setLeaveStartDate('');
@@ -1139,6 +1302,17 @@ export default function App() {
         status: 'pending',
         createdAt: serverTimestamp(),
       });
+      // Yöneticiye push bildirimi gönder
+      fetch('/api/notify/newrequest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          userName: profile.name,
+          requestType: 'overtime',
+          managerId: profile.managerId || 'admin_initial'
+        })
+      }).catch(() => {});
       setStatus({ type: 'success', message: 'Fazla mesai talebiniz iletildi.' });
       (e.target as HTMLFormElement).reset();
       setOvertimeEndTime('');
@@ -1165,8 +1339,7 @@ export default function App() {
           const currentBalance = getEffectiveLeaveBalance(userData);
           await setDoc(userRef, { 
             ...userData, 
-            leaveBalance: currentBalance - requestData.days,
-            _system_key: 'pdk_system_secret_2026'
+            leaveBalance: currentBalance - requestData.days
           });
         }
       }
@@ -1175,11 +1348,25 @@ export default function App() {
         ...requestData, 
         status: action,
       });
+
+      // Push bildirimi gönder (arka planda, hata olsa bile devam)
+      fetch('/api/notify/approval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetUid: requestData.userId,
+          isApproved: action === 'approved',
+          requestType: collectionName === 'leaveRequests' ? 'leave' : 'overtime',
+          actorName: profile?.name || 'Yönetici'
+        })
+      }).catch(() => {});
+
       setStatus({ type: 'success', message: `Talep ${action === 'approved' ? 'onaylandı' : 'reddedildi'}.` });
     } catch (error) {
       setStatus({ type: 'error', message: 'İşlem sırasında hata oluştu.' });
     }
   };
+
 
   const handleDeleteLeave = async (id: string, reason: string) => {
     if (!profile || profile.role !== 'admin' || !deletingLeave) return;
@@ -1238,7 +1425,6 @@ export default function App() {
       days: parseInt(formData.get('days') as string),
       reason: formData.get('reason') as string,
       status: formData.get('status') as string,
-      _system_key: 'pdk_system_secret_2026'
     };
 
     try {
@@ -1269,6 +1455,7 @@ export default function App() {
     const birthDate = formData.get('birthDate') as string;
     const allowedDevice = formData.get('allowedDevice') as string;
     const deviceId = formData.get('deviceId') as string;
+    const canRemoteCheckIn = formData.get('canRemoteCheckIn') === 'true';
 
     try {
       const response = await fetch('/api/users/update', {
@@ -1277,7 +1464,7 @@ export default function App() {
         body: JSON.stringify({ 
           adminUid: profile.uid,
           targetUid: editingUser.uid,
-          updates: { name, title, password, role, managerId, leaveBalance, startDate, birthDate, allowedDevice, deviceId }
+          updates: { name, title, password, role, managerId, leaveBalance, startDate, birthDate, allowedDevice, deviceId, canRemoteCheckIn }
         })
       });
 
@@ -1455,7 +1642,14 @@ export default function App() {
                           notifications.map(notif => (
                             <div 
                               key={notif.id}
-                              onClick={() => markNotificationRead(notif.id!)}
+                              onClick={() => {
+                                markNotificationRead(notif.id!);
+                                // Bildirime tıklandığında ilgili sayfaya git
+                                if (notif.link) {
+                                  navigate(notif.link);
+                                  setShowNotifications(false);
+                                }
+                              }}
                               className={cn(
                                 "border-b border-zinc-800 p-4 transition-colors hover:bg-zinc-800/50 cursor-pointer relative",
                                 !notif.read && "bg-orange-500/5"
@@ -1473,17 +1667,23 @@ export default function App() {
                                 )}>
                                   <Info size={12} />
                                 </div>
-                                <div className="space-y-1">
+                                <div className="space-y-1 flex-1">
                                   <p className="text-xs font-bold leading-none">{notif.title}</p>
-                                  <p className="text-[10px] text-zinc-500 leading-relaxed capitalize-first">{notif.message}</p>
-                                  <p className="text-[8px] text-zinc-600 uppercase font-black">
-                                    {format(notif.createdAt.toDate(), 'd MMM HH:mm')}
-                                  </p>
+                                  <p className="text-[10px] text-zinc-500 leading-relaxed">{notif.message}</p>
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-[8px] text-zinc-600 uppercase font-black">
+                                      {notif.createdAt?.toDate ? format(notif.createdAt.toDate(), 'd MMM HH:mm') : ''}
+                                    </p>
+                                    {notif.link && (
+                                      <span className="text-[9px] text-orange-500 font-bold">Görüntüle →</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             </div>
                           ))
                         )}
+
                       </div>
                     </motion.div>
                   </>
@@ -1525,23 +1725,60 @@ export default function App() {
 
         {activeTab === 'home' && (
           <>
+            {/* Çevrimdışı Mod Uyarısı */}
+            {!isOnline && (
+              <div className="flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+                <WifiOff size={18} className="text-amber-400 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-amber-400">Çevrimdışı Mod</p>
+                  <p className="text-xs text-amber-400/70">İnternet yok. Hareketler cihazınıza kaydedilecek, bağlantı gelince otomatik gönderilecek.</p>
+                </div>
+              </div>
+            )}
+            {offlineQueueCount > 0 && isOnline && (
+              <div className="flex items-center gap-3 rounded-2xl border border-blue-500/30 bg-blue-500/10 p-4">
+                <Clock size={18} className="text-blue-400 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-blue-400">{offlineQueueCount} Bekleyen Hareket</p>
+                  <p className="text-xs text-blue-400/70">İnternet geldi. Senkronize ediliyor...</p>
+                </div>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="grid grid-cols-2 gap-4">
               <button
-                onClick={() => { setScanType('in'); setShowScanner(true); }}
+                onClick={() => {
+                  if (profile?.canRemoteCheckIn && settings?.officeIp && currentIp !== settings.officeIp) {
+                    // Nakliyedeyse not modal'ını aç
+                    setPendingScanType('in');
+                    setShowRemoteModal(true);
+                  } else {
+                    setScanType('in'); setShowScanner(true);
+                  }
+                }}
                 className="group relative flex flex-col items-center justify-center gap-3 overflow-hidden rounded-3xl bg-emerald-600 p-8 text-white transition-all hover:bg-emerald-500"
               >
                 <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/10 transition-transform group-hover:scale-150" />
                 <LogIn size={40} />
                 <span className="text-lg font-bold">Giriş Yap</span>
+                {profile?.canRemoteCheckIn && <span className="text-[10px] opacity-70 flex items-center gap-1"><Truck size={10} /> Nakliye Yetkili</span>}
               </button>
               <button
-                onClick={() => { setScanType('out'); setShowScanner(true); }}
+                onClick={() => {
+                  if (profile?.canRemoteCheckIn && settings?.officeIp && currentIp !== settings.officeIp) {
+                    setPendingScanType('out');
+                    setShowRemoteModal(true);
+                  } else {
+                    setScanType('out'); setShowScanner(true);
+                  }
+                }}
                 className="group relative flex flex-col items-center justify-center gap-3 overflow-hidden rounded-3xl bg-zinc-900 p-8 text-white transition-all hover:bg-zinc-800"
               >
                 <div className="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-white/5 transition-transform group-hover:scale-150" />
                 <LogOut size={40} />
                 <span className="text-lg font-bold">Çıkış Yap</span>
+                {profile?.canRemoteCheckIn && <span className="text-[10px] opacity-70 flex items-center gap-1"><Truck size={10} /> Nakliye Yetkili</span>}
               </button>
             </div>
 
@@ -1549,10 +1786,10 @@ export default function App() {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="rounded-2xl border border-zinc-900 bg-zinc-900/30 p-4">
                 <div className="mb-2 flex items-center gap-2 text-zinc-500">
-                  <Wifi size={16} />
+                  {isOnline ? <Wifi size={16} /> : <WifiOff size={16} className="text-amber-400" />}
                   <span className="text-xs font-semibold uppercase tracking-wider">Ağ Durumu</span>
                 </div>
-                <p className="text-sm font-medium">{currentIp || 'Tespit ediliyor...'}</p>
+                <p className="text-sm font-medium">{isOnline ? (currentIp || 'Tespit ediliyor...') : 'Çevrimdışı'}</p>
                 <p className="text-[10px] text-zinc-600">Mevcut IP Adresiniz</p>
               </div>
               <div className="rounded-2xl border border-zinc-900 bg-zinc-900/30 p-4">
@@ -1572,6 +1809,7 @@ export default function App() {
                 <p className="text-[10px] text-zinc-600">Sistem Durumu</p>
               </div>
             </div>
+
 
             {/* Attendance Logs (Only for non-admins or if admin wants to see their own) */}
             {profile?.role !== 'admin' && (
@@ -2351,10 +2589,28 @@ export default function App() {
                     />
                   </div>
                   <div className="md:col-span-2">
+                    <label className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 cursor-pointer hover:border-orange-500/50 transition-colors">
+                      <input 
+                        name="canRemoteCheckIn"
+                        type="checkbox"
+                        value="true"
+                        className="h-4 w-4 accent-orange-500"
+                      />
+                      <div>
+                        <p className="text-sm font-semibold text-white flex items-center gap-2">
+                          <Truck size={14} className="text-orange-500" />
+                          Nakliye / Uzaktan Giriş Yetkisi
+                        </p>
+                        <p className="text-[11px] text-zinc-500 mt-0.5">Bu personel ofis dışından (nakliyede) da giriş-çıkış yapabilir. Konumu kaydedilir, yöneticileri bildirim alır.</p>
+                      </div>
+                    </label>
+                  </div>
+                  <div className="md:col-span-2">
                     <button className="w-full rounded-xl bg-orange-500 py-3 font-bold text-white transition-colors hover:bg-orange-600">
                       Personel Ekle
                     </button>
                   </div>
+
                 </form>
               </div>
             )}
@@ -3171,7 +3427,6 @@ export default function App() {
                           onClick={() => {
                             const newUpdates = { ...editingUser, deviceId: '' };
                             setEditingUser(newUpdates);
-                            // Immediate server reset preferred for UX
                             fetch('/api/users/update', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
@@ -3198,6 +3453,26 @@ export default function App() {
                       className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm focus:border-orange-500 focus:outline-none"
                     />
                   </div>
+                  {/* Nakliye / Uzaktan giriş yetkisi */}
+                  <div className="md:col-span-2">
+                    <label className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 cursor-pointer hover:border-orange-500/50 transition-colors">
+                      <input 
+                        name="canRemoteCheckIn"
+                        type="checkbox"
+                        value="true"
+                        defaultChecked={editingUser.canRemoteCheckIn === true}
+                        className="h-4 w-4 accent-orange-500"
+                      />
+                      <div>
+                        <p className="text-sm font-semibold text-white flex items-center gap-2">
+                          <Truck size={14} className="text-orange-500" />
+                          Nakliye / Uzaktan Giriş Yetkisi
+                        </p>
+                        <p className="text-[11px] text-zinc-500 mt-0.5">Bu personel ofis dışından (nakliyede) da giriş-çıkış yapabilir. Konumu kaydedilir, yöneticileri bildirim alır.</p>
+                      </div>
+                    </label>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-xs font-semibold text-zinc-500 uppercase">Şifre Sıfırla (Yeni Şifre)</label>
                     <input 
@@ -3441,7 +3716,6 @@ export default function App() {
                       if (!editingOvertime?.id) return;
                       await setDoc(doc(db, 'overtimeRequests', editingOvertime.id), {
                         deleted: true,
-                        _system_key: 'pdk_system_secret_2026'
                       }, { merge: true });
                       setEditingOvertime(null);
                       setStatus({ type: 'success', message: 'Mesai kaydı silindi.' });
@@ -3638,7 +3912,6 @@ export default function App() {
                             onClick={async () => {
                               await setDoc(doc(db, 'overtimeRequests', deletingOvertime.id!), {
                                 deleted: true,
-                                _system_key: 'pdk_system_secret_2026'
                               }, { merge: true });
                               setDeletingOvertime(null);
                               setStatus({ type: 'success', message: 'Mesai kaydı silindi.' });
@@ -3818,7 +4091,6 @@ export default function App() {
                   try {
                     await setDoc(doc(db, 'overtimeRequests', deletingOvertime.id!), {
                       deleted: true,
-                      _system_key: 'pdk_system_secret_2026'
                     }, { merge: true });
                     setDeletingOvertime(null);
                     setStatus({ type: 'success', message: 'Mesai kaydı silindi' });
@@ -3916,7 +4188,74 @@ export default function App() {
             </div>
           )}
         </AnimatePresence>
+
+      {/* Nakliye / Uzaktan Giriş Modu Modal */}
+      <AnimatePresence>
+        {showRemoteModal && (
+          <div className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ y: 50, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950 p-6 space-y-5"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500">
+                  <Truck size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-lg">Nakliye Modu</h3>
+                  <p className="text-xs text-zinc-500">Ofis dışından {pendingScanType === 'in' ? 'giriş' : 'çıkış'} yapıyorsunuz</p>
+                </div>
+                <button onClick={() => setShowRemoteModal(false)} className="ml-auto text-zinc-500 hover:text-white">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-400">
+                <p className="font-bold mb-1">📍 Konum Kaydedilecek</p>
+                <p>Bu işlem sırasında bulunduğunuz konum yöneticinize iletilecektir.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-zinc-400 uppercase">Mazeret / Açıklama Notu</label>
+                <textarea
+                  value={remoteNote}
+                  onChange={(e) => setRemoteNote(e.target.value)}
+                  placeholder="Örn: Ankara'dan mal teslimi için yola çıktım..."
+                  rows={3}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm focus:border-orange-500 focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => { setShowRemoteModal(false); setRemoteNote(''); }}
+                  className="rounded-xl border border-zinc-700 py-3 text-sm font-bold text-zinc-400 hover:bg-zinc-800 transition"
+                >
+                  İptal
+                </button>
+                <button
+                  onClick={() => {
+                    if (pendingScanType) {
+                      setScanType(pendingScanType);
+                      setShowRemoteModal(false);
+                      setShowScanner(true);
+                    }
+                  }}
+                  className="rounded-xl bg-orange-500 py-3 text-sm font-bold text-white hover:bg-orange-600 transition flex items-center justify-center gap-2"
+                >
+                  <Navigation size={16} />
+                  QR Okut
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       </main>
+
 
       {/* Bottom Nav */}
       <BottomNav

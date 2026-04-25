@@ -1,3 +1,22 @@
+export type RoleName = 'admin' | 'mudur' | 'takim_lideri' | 'personel' | 'deleted';
+
+export interface Permission {
+  canApproveLeave: boolean;
+  canApproveOvertime: boolean;
+  canViewAllAttendance: boolean;
+  canManageUsers: boolean;
+  canViewReports: boolean;
+  canUseRemoteCheckIn: boolean; // Nakliye / Uzaktan giriş yetkisi
+}
+
+export interface RoleDefinition {
+  id: string;
+  name: string;
+  label: string; // Türkçe görüntü adı
+  permissions: Permission;
+  rank: number; // Küçük sayı = daha üst hiyerarşi
+}
+
 export interface UserProfile {
   uid: string;
   personnelId: string;
@@ -5,13 +24,16 @@ export interface UserProfile {
   name: string;
   title?: string;
   email?: string;
-  role: 'admin' | 'employee' | 'deleted';
-  managerId?: string; // Assigned manager (admin)
-  leaveBalance: number; // Annual leave balance
-  startDate?: string; // Employment start date (YYYY-MM-DD)
-  birthDate?: string; // Birth date (YYYY-MM-DD)
-  allowedDevice?: string; // Restricted device model/UA
-  deviceId?: string; // Registered fixed device ID
+  role: RoleName;
+  customRole?: string; // RoleDefinition.id referansı
+  managerId?: string;
+  leaveBalance: number;
+  startDate?: string;
+  birthDate?: string;
+  allowedDevice?: string;
+  deviceId?: string;
+  pushSubscription?: string; // JSON string of PushSubscription
+  canRemoteCheckIn?: boolean; // Nakliye/uzaktan giriş yetkisi
   createdAt: string;
 }
 
@@ -25,7 +47,7 @@ export interface LeaveRequest {
   days: number;
   reason: string;
   type: 'annual' | 'report' | 'excuse';
-  attachmentUrl?: string; // For report PDFs
+  attachmentUrl?: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: any;
   deleted?: boolean;
@@ -43,13 +65,14 @@ export interface OvertimeRequest {
   description: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: any;
+  deleted?: boolean;
 }
 
 export interface AttendanceLog {
   id?: string;
   userId: string;
   userName: string;
-  timestamp: any; // Firestore Timestamp
+  timestamp: any;
   type: 'in' | 'out';
   ipAddress: string;
   status?: 'success' | 'warning' | 'error';
@@ -58,7 +81,10 @@ export interface AttendanceLog {
     latitude: number;
     longitude: number;
   };
+  isRemote?: boolean; // Nakliye / uzaktan giriş
+  remoteNote?: string; // Personelin nakliye notu/mazereti
   deleted?: boolean;
+  offlineQueued?: boolean; // Çevrimdışı kuyruğundan gönderildi
 }
 
 export interface GlobalSettings {
@@ -83,4 +109,14 @@ export interface SystemNotification {
   type: 'info' | 'warning' | 'success' | 'error';
   read: boolean;
   createdAt: any;
+  link?: string; // Uygulamada yönlendirilecek yol (örn: '/izinler')
+  deleted?: boolean;
+}
+
+// Çevrimdışı kuyruğu için (IndexedDB'de saklanır)
+export interface OfflineQueueItem {
+  id: string;
+  type: 'attendance';
+  payload: Omit<AttendanceLog, 'id' | 'timestamp'> & { clientTimestamp: string };
+  createdAt: string;
 }
