@@ -1368,6 +1368,9 @@ export default function App() {
           <p className="text-center text-xs text-zinc-600">
             Giriş bilgilerinizi yöneticinizden temin edebilirsiniz.
           </p>
+          <div className="mt-4 text-center text-[10px] text-zinc-700 font-mono">
+            Cihaz Kimliği: {getOrCreateDeviceId()}
+          </div>
         </motion.div>
       </div>
     );
