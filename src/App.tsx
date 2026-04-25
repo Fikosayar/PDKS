@@ -650,7 +650,6 @@ export default function App() {
       await setDoc(doc(db, 'settings', 'global'), { 
         ...settings, 
         qrSecret: newSecret,
-        _system_key: 'pdk_system_secret_2026'
       });
       setStatus({ type: 'success', message: 'QR kod başarıyla güncellendi.' });
     } catch (error) {
@@ -659,11 +658,25 @@ export default function App() {
   };
 
   const isProcessingScan = React.useRef(false);
+  const lastScanTimestamp = React.useRef<number>(0);
+  const SCAN_COOLDOWN_MS = 60000; // 1 dakika mükerrer koruma
 
   const handleScanSuccess = async (decodedText: string) => {
     if (!settings || !user || !profile || !scanType || isProcessingScan.current) return;
     
+    // Mükerrer okutma koruması: Son 1 dakika içinde aynı işlem yapıldıysa engelle
+    const now = Date.now();
+    if (now - lastScanTimestamp.current < SCAN_COOLDOWN_MS) {
+      const kalanSaniye = Math.ceil((SCAN_COOLDOWN_MS - (now - lastScanTimestamp.current)) / 1000);
+      setStatus({ type: 'error', message: `Çok hızlı okutma! Lütfen ${kalanSaniye} saniye bekleyin.` });
+      setShowScanner(false);
+      return;
+    }
+    
     isProcessingScan.current = true;
+    // Scanner'ı hemen kapat ki çift okutma olmasın
+    setShowScanner(false);
+    
     try {
       // 1. QR Secret Check
       if (decodedText !== settings.qrSecret) {
@@ -674,11 +687,9 @@ export default function App() {
           type: scanType,
           ipAddress: currentIp,
           status: 'error',
-          errorMessage: 'Geçersiz QR Kod Okutuldu',
-          _system_key: 'pdk_system_secret_2026'
+          errorMessage: 'Geçersiz QR Kod Okutuldu'
         });
         setStatus({ type: 'error', message: 'Geçersiz QR kod. Lütfen iş yerindeki güncel kodu okutun.' });
-        setShowScanner(false);
         isProcessingScan.current = false;
         return;
       }
@@ -692,11 +703,9 @@ export default function App() {
           type: scanType,
           ipAddress: currentIp,
           status: 'error',
-          errorMessage: 'Hatalı IP / Ağ Erişimi Denemesi',
-          _system_key: 'pdk_system_secret_2026'
+          errorMessage: 'Hatalı IP / Ağ Erişimi Denemesi'
         });
         setStatus({ type: 'error', message: `Hatalı ağ. Sadece iş yeri Wi-Fi ağına bağlıyken işlem yapabilirsiniz. (Mevcut IP: ${currentIp})` });
-        setShowScanner(false);
         isProcessingScan.current = false;
         return;
       }
@@ -724,9 +733,11 @@ export default function App() {
         type: scanType,
         ipAddress: currentIp,
         location: location || null,
-        status: 'success',
-        _system_key: 'pdk_system_secret_2026'
+        status: 'success'
       });
+      
+      // Mükerrer koruma: Son başarılı okutma zamanını kaydet
+      lastScanTimestamp.current = Date.now();
       
       // Check for auto-overtime
       if (scanType === 'out') {
@@ -734,7 +745,6 @@ export default function App() {
       }
 
       setStatus({ type: 'success', message: `${scanType === 'in' ? 'Giriş' : 'Çıkış'} işleminiz başarıyla kaydedildi.` });
-      setShowScanner(false);
       setScanType(null);
     } catch (error) {
       console.error("Save log error:", error);
@@ -1033,7 +1043,6 @@ export default function App() {
       await setDoc(doc(db, 'users', uid), { 
         ...allUsers.find(u => u.uid === uid), 
         role: 'deleted',
-        _system_key: 'pdk_system_secret_2026'
       }); 
       setStatus({ type: 'success', message: 'Personel kaydı pasif hale getirildi.' });
       setDeletingUser(null);
@@ -1089,7 +1098,6 @@ export default function App() {
         attachmentUrl,
         status: 'pending',
         createdAt: serverTimestamp(),
-        _system_key: 'pdk_system_secret_2026'
       });
       setStatus({ type: 'success', message: leaveType === 'report' ? 'Raporunuz iletildi.' : 'İzin talebiniz iletildi.' });
       (e.target as HTMLFormElement).reset();
@@ -1130,7 +1138,6 @@ export default function App() {
         description,
         status: 'pending',
         createdAt: serverTimestamp(),
-        _system_key: 'pdk_system_secret_2026'
       });
       setStatus({ type: 'success', message: 'Fazla mesai talebiniz iletildi.' });
       (e.target as HTMLFormElement).reset();
@@ -1167,7 +1174,6 @@ export default function App() {
       await setDoc(requestRef, { 
         ...requestData, 
         status: action,
-        _system_key: 'pdk_system_secret_2026'
       });
       setStatus({ type: 'success', message: `Talep ${action === 'approved' ? 'onaylandı' : 'reddedildi'}.` });
     } catch (error) {
@@ -1188,7 +1194,6 @@ export default function App() {
         deleted: true,
         deleteReason: reason,
         deletedBy: profile.uid,
-        _system_key: 'pdk_system_secret_2026'
       }, { merge: true });
 
       // 2. Revert balance if annual
