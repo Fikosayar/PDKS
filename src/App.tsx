@@ -149,11 +149,29 @@ export default function App() {
   };
 
   const getOrCreateDeviceId = () => {
+    // 1. Önce LocalStorage'a bak
     let devId = localStorage.getItem('pdks_device_id');
+    
+    // 2. Yoksa çerezlere (Cookie) bak (Safari bazen localStorage siler ama çerezi tutar)
+    if (!devId) {
+      const match = document.cookie.match(new RegExp('(^| )pdks_device_id=([^;]+)'));
+      if (match) devId = match[2];
+    }
+    
+    // 3. İkisinde de yoksa sıfırdan oluştur
     if (!devId) {
       devId = 'dev-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-      localStorage.setItem('pdks_device_id', devId);
     }
+    
+    // Her ihtimale karşı ikisine birden tekrar güçlüce kaydet
+    try {
+      localStorage.setItem('pdks_device_id', devId);
+      // Çerezi 10 yıl geçerli olacak şekilde ayarla
+      document.cookie = `pdks_device_id=${devId}; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`;
+    } catch (e) {
+      console.warn("Tarayıcı veri kaydetmeyi engelliyor.");
+    }
+    
     return devId;
   };
 
