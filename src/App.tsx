@@ -61,6 +61,7 @@ import {
   Key,
   ArrowLeft,
   ChevronRight,
+  ChevronLeft,
   Download,
   Save,
   Clock4,
@@ -69,8 +70,10 @@ import {
   Bell,
   Info,
   Truck,
-  Navigation
+  Navigation,
+  CheckCircle
 } from 'lucide-react';
+
 import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
@@ -131,9 +134,13 @@ export default function App() {
   const [showRemoteModal, setShowRemoteModal] = useState(false);
   const [remoteNote, setRemoteNote] = useState('');
   const [pendingScanType, setPendingScanType] = useState<'in' | 'out' | null>(null);
+  const [remoteManualMode, setRemoteManualMode] = useState(false); // true = manuel, false = QR
+  const [remoteManualTime, setRemoteManualTime] = useState('');
+  const [remoteSubmitting, setRemoteSubmitting] = useState(false);
 
   // Push bildirim durumu
   const [pushEnabled, setPushEnabled] = useState(false);
+
 
 
   const getEffectiveLeaveBalance = (u: UserProfile | null) => {
@@ -894,15 +901,24 @@ export default function App() {
         setOfflineQueueCount(newCount);
         setStatus({ type: 'success', message: `📵 İnternetsiz mod: ${scanType === 'in' ? 'Giriş' : 'Çıkış'} kaydedildi, internet gelince senkronize edilecek.` });
       } else {
-        const timestamp = new Date();
-        await addDoc(collection(db, 'attendance'), {
+        const clientNow = new Date();
+        // Firestore'a yaz
+        const newDocRef = await addDoc(collection(db, 'attendance'), {
           ...logPayload,
           timestamp: serverTimestamp(),
         });
 
+        // OPTİMİSTİK UI: Snapshot beklemeden anında state'e ekle
+        const optimisticLog: AttendanceLog = {
+          id: newDocRef.id,
+          ...logPayload,
+          timestamp: { toDate: () => clientNow } as any,
+        };
+        setLogs(prev => [optimisticLog, ...prev.filter(l => l.id !== newDocRef.id)]);
+
         // Check for auto-overtime
         if (scanType === 'out') {
-          await checkAndCreateAutoOvertime(user.uid, profile.name, timestamp, 'out');
+          await checkAndCreateAutoOvertime(user.uid, profile.name, clientNow, 'out');
         }
 
         // Yöneticiye giriş bildirimi gönder
@@ -920,6 +936,7 @@ export default function App() {
 
         setStatus({ type: 'success', message: `${isRemote ? '🚛 Nakliye: ' : ''}${scanType === 'in' ? 'Giriş' : 'Çıkış'} işleminiz başarıyla kaydedildi.` });
       }
+
 
       // Mükerrer koruma: Son başarılı okutma zamanını kaydet
       lastScanTimestamp.current = Date.now();
@@ -1773,11 +1790,12 @@ export default function App() {
             <div className="grid grid-cols-2 gap-4">
               <button
                 onClick={() => {
-                  if (profile?.canRemoteCheckIn && settings?.officeIp && currentIp !== settings.officeIp) {
-                    // Nakliyedeyse not modal'ını aç
+                  if (profile?.canRemoteCheckIn) {
+                    // Uzaktan yetkili: her zaman yöntem seçim modal'ı göster
                     setPendingScanType('in');
                     setShowRemoteModal(true);
                   } else {
+                    // Yetkisiz: direkt QR scanner
                     setScanType('in'); setShowScanner(true);
                   }
                 }}
@@ -1790,7 +1808,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
-                  if (profile?.canRemoteCheckIn && settings?.officeIp && currentIp !== settings.officeIp) {
+                  if (profile?.canRemoteCheckIn) {
                     setPendingScanType('out');
                     setShowRemoteModal(true);
                   } else {
@@ -1805,6 +1823,7 @@ export default function App() {
                 {profile?.canRemoteCheckIn && <span className="text-[10px] opacity-70 flex items-center gap-1"><Truck size={10} /> Nakliye Yetkili</span>}
               </button>
             </div>
+
 
             {/* Info Cards */}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -4214,72 +4233,194 @@ export default function App() {
           )}
         </AnimatePresence>
 
-      {/* Nakliye / Uzaktan Giriş Modu Modal */}
+      {/* Nakliye / Uzaktan Giriş Seçim Modal */}
       <AnimatePresence>
         {showRemoteModal && (
           <div className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-4">
             <motion.div
-              initial={{ y: 50, opacity: 0 }}
+              initial={{ y: 60, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 50, opacity: 0 }}
-              className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950 p-6 space-y-5"
+              exit={{ y: 60, opacity: 0 }}
+              transition={{ type: 'spring', damping: 20 }}
+              className="w-full max-w-md rounded-3xl border border-zinc-800 bg-zinc-950 overflow-hidden"
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500">
-                  <Truck size={24} />
+              {/* Başlık */}
+              <div className="flex items-center gap-3 p-5 border-b border-zinc-800">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-500/10 text-orange-500 shrink-0">
+                  <Truck size={22} />
                 </div>
-                <div>
-                  <h3 className="font-bold text-white text-lg">Nakliye Modu</h3>
-                  <p className="text-xs text-zinc-500">Ofis dışından {pendingScanType === 'in' ? 'giriş' : 'çıkış'} yapıyorsunuz</p>
+                <div className="flex-1">
+                  <h3 className="font-bold text-white">Giriş Yöntemi</h3>
+                  <p className="text-xs text-zinc-500">
+                    {pendingScanType === 'in' ? '🟢 Giriş' : '🔴 Çıkış'} işlemi — Bir yöntem seçin
+                  </p>
                 </div>
-                <button onClick={() => setShowRemoteModal(false)} className="ml-auto text-zinc-500 hover:text-white">
+                <button onClick={() => { setShowRemoteModal(false); setRemoteManualMode(false); setRemoteNote(''); setRemoteManualTime(''); }} className="text-zinc-500 hover:text-white p-1">
                   <X size={20} />
                 </button>
               </div>
 
-              <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-400">
-                <p className="font-bold mb-1">📍 Konum Kaydedilecek</p>
-                <p>Bu işlem sırasında bulunduğunuz konum yöneticinize iletilecektir.</p>
-              </div>
+              {!remoteManualMode ? (
+                /* === EKRAN 1: Yöntem Seçimi === */
+                <div className="p-5 space-y-3">
+                  {/* QR Seçeneği */}
+                  <button
+                    onClick={() => {
+                      if (pendingScanType) {
+                        setScanType(pendingScanType);
+                        setShowRemoteModal(false);
+                        setRemoteManualMode(false);
+                        setShowScanner(true);
+                      }
+                    }}
+                    className="w-full flex items-center gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 hover:border-orange-500/50 hover:bg-zinc-900 transition-all text-left"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 shrink-0">
+                      <QrCode size={22} />
+                    </div>
+                    <div>
+                      <p className="font-bold text-white text-sm">QR Kod ile Giriş</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">İş yerindeki QR kodu kameraya okutun</p>
+                    </div>
+                    <ChevronRight size={18} className="ml-auto text-zinc-600" />
+                  </button>
 
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-zinc-400 uppercase">Mazeret / Açıklama Notu</label>
-                <textarea
-                  value={remoteNote}
-                  onChange={(e) => setRemoteNote(e.target.value)}
-                  placeholder="Örn: Ankara'dan mal teslimi için yola çıktım..."
-                  rows={3}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm focus:border-orange-500 focus:outline-none resize-none"
-                />
-              </div>
+                  {/* Manuel Seçeneği */}
+                  <button
+                    onClick={() => {
+                      setRemoteManualMode(true);
+                      setRemoteManualTime(format(new Date(), 'HH:mm'));
+                    }}
+                    className="w-full flex items-center gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4 hover:border-orange-500/50 hover:bg-zinc-900 transition-all text-left"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400 shrink-0">
+                      <Clock size={22} />
+                    </div>
+                    <div>
+                      <p className="font-bold text-white text-sm">Manuel Giriş</p>
+                      <p className="text-xs text-zinc-500 mt-0.5">Saati kendiniz girin (nakliye, saha çalışması)</p>
+                    </div>
+                    <ChevronRight size={18} className="ml-auto text-zinc-600" />
+                  </button>
 
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => { setShowRemoteModal(false); setRemoteNote(''); }}
-                  className="rounded-xl border border-zinc-700 py-3 text-sm font-bold text-zinc-400 hover:bg-zinc-800 transition"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={() => {
-                    if (pendingScanType) {
-                      setScanType(pendingScanType);
-                      setShowRemoteModal(false);
-                      setShowScanner(true);
-                    }
-                  }}
-                  className="rounded-xl bg-orange-500 py-3 text-sm font-bold text-white hover:bg-orange-600 transition flex items-center justify-center gap-2"
-                >
-                  <Navigation size={16} />
-                  QR Okut
-                </button>
-              </div>
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 flex items-start gap-2">
+                    <MapPin size={14} className="text-amber-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-400">Her iki yöntemde de konumunuz ve notunuz yöneticinize iletilir.</p>
+                  </div>
+                </div>
+              ) : (
+                /* === EKRAN 2: Manuel Giriş Formu === */
+                <div className="p-5 space-y-4">
+                  <button onClick={() => setRemoteManualMode(false)} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-white transition">
+                    <ChevronLeft size={14} /> Geri dön
+                  </button>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-zinc-400 uppercase">{pendingScanType === 'in' ? 'Giriş Saati' : 'Çıkış Saati'}</label>
+                    <input
+                      type="time"
+                      value={remoteManualTime}
+                      onChange={(e) => setRemoteManualTime(e.target.value)}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-2xl font-bold text-center focus:border-orange-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-zinc-400 uppercase">Açıklama / Konum Notu</label>
+                    <textarea
+                      value={remoteNote}
+                      onChange={(e) => setRemoteNote(e.target.value)}
+                      placeholder="Örn: Ankara mal teslimi, şantiye çalışması..."
+                      rows={3}
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm focus:border-orange-500 focus:outline-none resize-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => { setShowRemoteModal(false); setRemoteManualMode(false); setRemoteNote(''); }}
+                      className="rounded-xl border border-zinc-700 py-3 text-sm font-bold text-zinc-400 hover:bg-zinc-800 transition"
+                    >
+                      İptal
+                    </button>
+                    <button
+                      disabled={remoteSubmitting || !remoteManualTime}
+                      onClick={async () => {
+                        if (!user || !profile || !pendingScanType || !remoteManualTime) return;
+                        setRemoteSubmitting(true);
+                        try {
+                          // Saat bilgisini bugüne uygula
+                          const [h, m] = remoteManualTime.split(':').map(Number);
+                          const clientNow = new Date();
+                          clientNow.setHours(h, m, 0, 0);
+
+                          // GPS konum al
+                          let location = undefined;
+                          try {
+                            const pos = await new Promise<GeolocationPosition>((res, rej) => {
+                              navigator.geolocation.getCurrentPosition(res, rej, { timeout: 4000 });
+                            });
+                            location = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+                          } catch {}
+
+                          const logPayload = {
+                            userId: user.uid,
+                            userName: profile.name,
+                            type: pendingScanType,
+                            ipAddress: currentIp || 'Manuel',
+                            location: location || null,
+                            status: 'success' as const,
+                            isRemote: true,
+                            remoteNote: remoteNote || '',
+                            manualEntry: true,
+                          };
+
+                          const newDocRef = await addDoc(collection(db, 'attendance'), {
+                            ...logPayload,
+                            timestamp: serverTimestamp(),
+                          });
+
+                          // Optimistik UI
+                          const optimisticLog: AttendanceLog = {
+                            id: newDocRef.id,
+                            ...logPayload,
+                            timestamp: { toDate: () => clientNow } as any,
+                          };
+                          setLogs(prev => [optimisticLog, ...prev.filter(l => l.id !== newDocRef.id)]);
+
+                          // Bildirim gönder
+                          fetch('/api/notify/checkin', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: user.uid, userName: profile.name, type: pendingScanType, isRemote: true, remoteNote: remoteNote || '' })
+                          }).catch(() => {});
+
+                          setStatus({ type: 'success', message: `🚛 Manuel ${pendingScanType === 'in' ? 'giriş' : 'çıkış'} kaydedildi: ${remoteManualTime}` });
+                          setShowRemoteModal(false);
+                          setRemoteManualMode(false);
+                          setRemoteNote('');
+                          setRemoteManualTime('');
+                        } catch (err) {
+                          setStatus({ type: 'error', message: 'Manuel kayıt sırasında hata oluştu.' });
+                        } finally {
+                          setRemoteSubmitting(false);
+                        }
+                      }}
+                      className="rounded-xl bg-orange-500 py-3 text-sm font-bold text-white hover:bg-orange-600 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {remoteSubmitting ? <Clock size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+                      {remoteSubmitting ? 'Kaydediliyor...' : 'Kaydet'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
       </main>
+
 
 
       {/* Bottom Nav */}
