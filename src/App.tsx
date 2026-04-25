@@ -430,7 +430,7 @@ export default function App() {
     if (profile.role === 'admin') {
       q = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(1000));
     } else {
-      q = query(collection(db, 'attendance'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'), limit(500));
+      q = query(collection(db, 'attendance'), where('userId', '==', user.uid));
     }
 
     const unsubscribe = onSnapshot(q, { includeMetadataChanges: false }, (snapshot) => {
@@ -440,7 +440,19 @@ export default function App() {
           ...doc.data()
         }))
         .filter((l: any) => !l.deleted) as AttendanceLog[];
+      
+      // Admin ise zaten server'da sıralı, değilse client'ta sırala (Index hatasını önlemek için)
+      if (profile.role !== 'admin') {
+        newLogs.sort((a,b) => {
+          const aT = a.timestamp?.toDate?.()?.getTime?.() || 0;
+          const bT = b.timestamp?.toDate?.()?.getTime?.() || 0;
+          return bT - aT;
+        });
+      }
+      
       setLogs(newLogs);
+    }, (error) => {
+      console.error("Logs listener error:", error);
     });
     return unsubscribe;
   }, [user, profile]);
@@ -455,9 +467,7 @@ export default function App() {
     const safeUids = teamUids.slice(0, 10);
     const q = query(
       collection(db, 'attendance'),
-      where('userId', 'in', safeUids),
-      orderBy('timestamp', 'desc'),
-      limit(500)
+      where('userId', 'in', safeUids)
     );
 
     const unsubscribe = onSnapshot(q, { includeMetadataChanges: false }, (snapshot) => {
@@ -467,6 +477,7 @@ export default function App() {
           ...doc.data()
         }))
         .filter((l: any) => !l.deleted) as AttendanceLog[];
+
       setLogs(prev => {
         const ownLogs = prev.filter(l => l.userId === user.uid);
         const merged = [...ownLogs, ...teamLogs];
@@ -1442,7 +1453,7 @@ export default function App() {
     }
   };
 
-  const handleRequestAction = async (collectionName: 'leaveRequests' | 'overtimeRequests', requestId: string, action: 'approved' | 'rejected') => {
+  const handleRequestAction = async (collectionName: 'leaveRequests' | 'overtimeRequests' | 'attendance', requestId: string, action: 'approved' | 'rejected') => {
     try {
       const requestRef = doc(db, collectionName, requestId);
       const requestSnap = await getDoc(requestRef);
@@ -1464,9 +1475,13 @@ export default function App() {
         }
       }
 
+      const finalStatus = collectionName === 'attendance' 
+        ? (action === 'approved' ? 'success' : 'error') 
+        : action;
+
       await setDoc(requestRef, { 
         ...requestData, 
-        status: action,
+        status: finalStatus,
       });
 
       // Push bildirimi gönder (arka planda, hata olsa bile devam)
@@ -2046,7 +2061,8 @@ export default function App() {
                     const isFuture = dayDate > today;
                     const holiday = getHoliday(dateStr);
                     const isHolidayDay = !!holiday;
-                    const hasSuccessLogs = dayInLogs.some(l => l.status !== 'error' && !l.deleted);
+                    const isPending = dayInLogs.some(l => l.status === 'pending' && !l.deleted);
+                    const hasSuccessLogs = dayInLogs.some(l => l.status !== 'error' && l.status !== 'pending' && !l.deleted);
                     const hasErrorLogs = dayInLogs.some(l => l.status === 'error' && !l.deleted);
 
                     results.push(
@@ -2055,7 +2071,8 @@ export default function App() {
                           onClick={() => setSelectedDayDetails({ date: dateStr, userId: user?.uid! })}
                           className={cn(
                             "aspect-square rounded-xl border p-1 flex flex-col items-center justify-between transition-all hover:scale-[1.02] hover:shadow-xl relative overflow-hidden",
-                            hasErrorLogs && !hasSuccessLogs ? "border-red-500/30 bg-red-500/5" :
+                            hasErrorLogs && !hasSuccessLogs && !isPending ? "border-red-500/30 bg-red-500/5" :
+                            isPending ? "border-amber-500/30 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.05)]" :
                             hasSuccessLogs ? "border-emerald-500/30 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.05)]" : 
                             leave ? "border-orange-500/30 bg-orange-500/5 shadow-[0_0_10px_rgba(249,115,22,0.1)]" : 
                             isHolidayDay ? "border-red-500/30 bg-red-500/5 shadow-[0_0_10px_rgba(239,68,68,0.1)]" :
@@ -2199,14 +2216,15 @@ export default function App() {
                                 <div className={cn(
                                   "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold uppercase",
                                   log.status === 'error' ? "bg-red-500/10 text-red-500" :
-                                  log.type === 'in' ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-800 text-zinc-400"
+                                  log.status === 'pending' ? "bg-amber-500/10 text-amber-500" :
+                                  log.type === 'in' ? "bg-emerald-500/10 text-emerald-500" : "bg-orange-500/10 text-orange-500"
                                 )}>
-                                  {log.status === 'error' ? <ShieldAlert size={10} /> : log.type === 'in' ? <LogIn size={10} /> : <LogOut size={10} />}
-                                  {log.status === 'error' ? 'Hata' : (log.type === 'in' ? 'Giriş' : 'Çıkış')}
+                                  {log.status === 'error' ? <ShieldAlert size={10} /> : log.status === 'pending' ? <Clock3 size={10} /> : log.type === 'in' ? <LogIn size={10} /> : <LogOut size={10} />}
+                                  {log.status === 'error' ? 'Hata' : log.status === 'pending' ? 'Bekliyor' : (log.type === 'in' ? 'Giriş' : 'Çıkış')}
                                 </div>
                               </td>
                               <td className="p-4 text-right">
-                                <p className="text-[10px] text-zinc-400 font-bold">{log.status === 'error' ? log.errorMessage : ''}</p>
+                                <p className="text-[10px] text-zinc-400 font-bold">{log.status === 'error' ? log.errorMessage : log.status === 'pending' ? 'Yönetici onayı bekleniyor' : ''}</p>
                                 <p className="text-[10px] text-zinc-600 font-mono">{log.ipAddress}</p>
                               </td>
                             </tr>
@@ -2233,9 +2251,10 @@ export default function App() {
                             <div className={cn(
                               "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-bold uppercase",
                               log.status === 'error' ? "bg-red-500/10 text-red-500" :
-                              log.type === 'in' ? "bg-emerald-500/10 text-emerald-500" : "bg-zinc-800 text-zinc-400"
+                              log.status === 'pending' ? "bg-amber-500/10 text-amber-500" :
+                              log.type === 'in' ? "bg-emerald-500/10 text-emerald-500" : "bg-orange-500/10 text-orange-500"
                             )}>
-                              {log.status === 'error' ? 'Hatalı' : (log.type === 'in' ? 'Giriş' : 'Çıkış')}
+                              {log.status === 'error' ? 'Hata' : log.status === 'pending' ? 'Bekliyor' : (log.type === 'in' ? 'Giriş' : 'Çıkış')}
                             </div>
                           </div>
                         ))
@@ -3148,6 +3167,19 @@ export default function App() {
                       </select>
                     </div>
 
+                    {leaveType === 'report' && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase">Rapor Belgesi</label>
+                        <input 
+                          type="file" 
+                          required 
+                          accept="image/*,.pdf"
+                          onChange={(e) => setReportFile(e.target.files?.[0] || null)}
+                          className="w-full text-sm text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-500/10 file:text-orange-500 hover:file:bg-orange-500/20"
+                        />
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold text-zinc-500 uppercase">Başlangıç</label>
@@ -3354,7 +3386,7 @@ export default function App() {
               </h2>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <div className="space-y-4">
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <FileText size={20} className="text-orange-500" /> İzin Onayları
@@ -3412,6 +3444,36 @@ export default function App() {
                         <div className="flex gap-2 pt-2">
                           <button onClick={() => handleRequestAction('overtimeRequests', req.id!, 'approved')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Check size={14} /> Onayla</button>
                           <button onClick={() => handleRequestAction('overtimeRequests', req.id!, 'rejected')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-red-600 py-2 text-xs font-bold text-white hover:bg-red-500"><X size={14} /> Reddet</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Manuel Kayıt Onayları */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Truck size={20} className="text-emerald-500" /> Manuel Kayıt Onayları
+                </h3>
+                <div className="space-y-3">
+                  {logs.filter(l => l.status === 'pending' && l.manualEntry && l.userId !== user.uid).length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-500 text-sm">
+                      Onay bekleyen manuel kayıt bulunmuyor.
+                    </div>
+                  ) : (
+                    logs.filter(l => l.status === 'pending' && l.manualEntry && l.userId !== user.uid).map(req => (
+                      <div key={req.id} className="rounded-2xl border border-zinc-900 bg-zinc-900/10 p-4 space-y-3 group relative">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-bold text-sm">{req.userName}</p>
+                            <p className="text-[10px] text-zinc-500">{req.timestamp?.toDate ? format(req.timestamp.toDate(), 'd MMM yyyy, HH:mm') : ''} - {req.type === 'in' ? 'Giriş' : 'Çıkış'}</p>
+                          </div>
+                        </div>
+                        {req.remoteNote && <p className="text-xs text-zinc-400 italic">"{req.remoteNote}"</p>}
+                        <div className="flex gap-2 pt-2">
+                          <button onClick={() => handleRequestAction('attendance', req.id!, 'approved')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-emerald-600 py-2 text-xs font-bold text-white hover:bg-emerald-500"><Check size={14} /> Onayla</button>
+                          <button onClick={() => handleRequestAction('attendance', req.id!, 'rejected')} className="flex-1 flex items-center justify-center gap-1 rounded-lg bg-red-600 py-2 text-xs font-bold text-white hover:bg-red-500"><X size={14} /> Reddet</button>
                         </div>
                       </div>
                     ))
@@ -4500,7 +4562,7 @@ export default function App() {
                             type: pendingScanType,
                             ipAddress: currentIp || 'Manuel',
                             location: location || null,
-                            status: 'success' as const,
+                            status: 'pending' as const,
                             isRemote: true,
                             remoteNote: remoteNote || '',
                             manualEntry: true,
@@ -4526,7 +4588,7 @@ export default function App() {
                             body: JSON.stringify({ userId: user.uid, userName: profile.name, type: pendingScanType, isRemote: true, remoteNote: remoteNote || '' })
                           }).catch(() => {});
 
-                          setStatus({ type: 'success', message: `🚛 Manuel ${pendingScanType === 'in' ? 'giriş' : 'çıkış'} kaydedildi: ${remoteManualTime}` });
+                          setStatus({ type: 'success', message: `🚛 Manuel ${pendingScanType === 'in' ? 'giriş' : 'çıkış'} talebi alındı. Yönetici onayından sonra kesinleşecek.` });
                           setShowRemoteModal(false);
                           setRemoteManualMode(false);
                           setRemoteNote('');

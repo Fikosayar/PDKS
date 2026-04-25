@@ -75,7 +75,7 @@ export interface AttendanceLog {
   timestamp: any;
   type: 'in' | 'out';
   ipAddress: string;
-  status?: 'success' | 'warning' | 'error';
+  status?: 'success' | 'warning' | 'error' | 'pending';
   errorMessage?: string;
   location?: {
     latitude: number;
