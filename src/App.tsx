@@ -336,31 +336,18 @@ export default function App() {
     });
     return unsubscribe;
   }, [user]);
-
-  // Logs listener — Admin: tüm veriler | Manager: kendi + ekibinin | Personel: sadece kendi
+   // Logs listener — Admin: tüm veriler | Personel/Manager: kendi verisi
   useEffect(() => {
     if (!user || !profile) return;
     
     let q;
     if (profile.role === 'admin') {
       q = query(collection(db, 'attendance'), orderBy('timestamp', 'desc'), limit(1000));
-    } else if (profile.managerId || allUsers.some(u => u.managerId === user.uid)) {
-      // Manager: kendi hareketleri + ekibinin hareketleri
-      q = query(
-        collection(db, 'attendance'),
-        or(
-          where('userId', '==', user.uid),
-          where('userId', 'in', allUsers.filter(u => u.managerId === user.uid).map(u => u.uid).concat([user.uid]).slice(0, 10))
-        ),
-        orderBy('timestamp', 'desc'),
-        limit(500)
-      );
     } else {
-      // Normal personel: sadece kendi verilerini görür
-      q = query(collection(db, 'attendance'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'), limit(200));
+      q = query(collection(db, 'attendance'), where('userId', '==', user.uid), orderBy('timestamp', 'desc'), limit(500));
     }
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, { includeMetadataChanges: false }, (snapshot) => {
       const newLogs = snapshot.docs
         .map(doc => ({
           id: doc.id,
@@ -370,9 +357,46 @@ export default function App() {
       setLogs(newLogs);
     });
     return unsubscribe;
+  }, [user, profile]);
+
+  // Ekip logs listener — Sadece yöneticiler için (altındaki personelin hareketleri)
+  useEffect(() => {
+    if (!user || !profile || profile.role === 'admin') return;
+    
+    const teamUids = allUsers.filter(u => u.managerId === user.uid).map(u => u.uid);
+    if (teamUids.length === 0) return;
+    
+    const safeUids = teamUids.slice(0, 10);
+    const q = query(
+      collection(db, 'attendance'),
+      where('userId', 'in', safeUids),
+      orderBy('timestamp', 'desc'),
+      limit(500)
+    );
+
+    const unsubscribe = onSnapshot(q, { includeMetadataChanges: false }, (snapshot) => {
+      const teamLogs = snapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter((l: any) => !l.deleted) as AttendanceLog[];
+      setLogs(prev => {
+        const ownLogs = prev.filter(l => l.userId === user.uid);
+        const merged = [...ownLogs, ...teamLogs];
+        const unique = merged.filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+        return unique.sort((a: any, b: any) => {
+          const aT = a.timestamp?.toDate?.()?.getTime?.() ?? 0;
+          const bT = b.timestamp?.toDate?.()?.getTime?.() ?? 0;
+          return bT - aT;
+        });
+      });
+    });
+    return unsubscribe;
   }, [user, profile, allUsers]);
 
   // Users listener (Admin and Managers)
+
   useEffect(() => {
     if (!user || !profile) return;
     
@@ -1837,8 +1861,9 @@ export default function App() {
               <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2 text-center text-[10px] font-bold text-zinc-500 uppercase tracking-tight">
                 {['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'].map(day => <div key={day} className="truncate">{day}</div>)}
               </div>
-              <div className="grid grid-cols-7 gap-2">
+              <div className="grid grid-cols-7 gap-2" key={`cal-${selectedMonth}-${logs.filter(l => l.userId === user?.uid).length}`}>
                 {(() => {
+
                   const results = [];
                   const today = new Date();
                   const [year, month] = selectedMonth.split('-').map(Number);
