@@ -40,7 +40,7 @@ export default function BottomNav({
 
   return (
     <nav className="fixed bottom-4 left-4 right-4 z-50 md:bottom-auto md:top-24 md:left-4 md:right-auto md:w-20 md:h-[calc(100vh-8rem)]">
-      <div className="glass-panel mx-auto max-w-lg md:max-w-none md:h-full w-full rounded-2xl flex md:flex-col items-center justify-between px-2 py-2 md:py-6 overflow-x-auto no-scrollbar gap-1">
+      <div className="glass-panel theme-bg-card mx-auto max-w-lg md:max-w-none md:h-full w-full rounded-2xl flex md:flex-col items-center justify-between px-2 py-2 md:py-6 overflow-x-auto no-scrollbar gap-1">
         <motion.button 
           whileTap={{ scale: 0.9 }}
           onClick={() => handleTabClick('home')}

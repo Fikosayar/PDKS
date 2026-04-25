@@ -71,7 +71,13 @@ import {
   Info,
   Truck,
   Navigation,
-  CheckCircle
+  CheckCircle,
+  Sun,
+  Moon,
+  Monitor,
+  BarChart3,
+  AlertTriangle,
+  TrendingDown
 } from 'lucide-react';
 
 import { format } from 'date-fns';
@@ -82,6 +88,8 @@ import BottomNav from './components/BottomNav';
 import { QRCodeSVG } from 'qrcode.react';
 import * as XLSX from 'xlsx';
 import { useLocation, useNavigate, Routes, Route, Navigate } from 'react-router-dom';
+import { getStoredTheme, setStoredTheme, applyTheme, listenSystemTheme, getEffectiveTheme, type Theme } from './lib/theme';
+import { getHoliday } from './lib/holidays';
 
 export default function App() {
   const [user, setUser] = useState<{ uid: string } | null>(null);
@@ -125,6 +133,23 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+
+  // Tema sistemi
+  const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
+  const effectiveTheme = getEffectiveTheme(theme);
+
+  useEffect(() => {
+    applyTheme(theme);
+    setStoredTheme(theme);
+    // Sistem teması değişince güncelle
+    if (theme === 'system') {
+      return listenSystemTheme(() => applyTheme('system'));
+    }
+  }, [theme]);
+
+  const cycleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : prev === 'light' ? 'system' : 'dark');
+  };
 
   // Çevrimdışı mod
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -223,8 +248,8 @@ export default function App() {
       if (birthDateStr) {
         const birth = new Date(birthDateStr);
         age = today.getFullYear() - birth.getFullYear();
-        const am = today.getMonth() - birth.getMonth();
-        if (am < 0 || (am === 0 && today.getDate() < birth.getDate())) {
+        const mAge = today.getMonth() - birth.getMonth();
+        if (mAge < 0 || (mAge === 0 && today.getDate() < birth.getDate())) {
           age--;
         }
       }
@@ -242,6 +267,60 @@ export default function App() {
       return 0;
     }
   };
+
+  // --- İSTATİSTİKLER VE GEÇ KALMA HESAPLAMALARI ---
+  const dashboardStats = React.useMemo(() => {
+    if (!profile || profile.role !== 'admin') return null;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    const todayLogs = logs.filter(l => !l.deleted && format(l.timestamp?.toDate() || new Date(), 'yyyy-MM-dd') === todayStr);
+    
+    const uniquePresentIds = new Set(todayLogs.filter(l => l.type === 'in').map(l => l.userId));
+    const onLeaveIds = new Set(leaveRequests.filter(r => r.status === 'approved' && !r.deleted && r.startDate <= todayStr && r.endDate >= todayStr).map(r => r.userId));
+    
+    // Geç kalanlar (Shift Start'tan sonra 'in' basanlar)
+    const shiftStart = settings?.shiftStart || '08:00';
+    let lateCount = 0;
+    todayLogs.filter(l => l.type === 'in').forEach(l => {
+      const time = format(l.timestamp?.toDate() || new Date(), 'HH:mm');
+      if (time > shiftStart) lateCount++;
+    });
+
+    return {
+      totalStaff: allUsers.length,
+      present: uniquePresentIds.size,
+      onLeave: onLeaveIds.size,
+      late: lateCount,
+      absent: allUsers.length - uniquePresentIds.size - onLeaveIds.size
+    };
+  }, [logs, allUsers, leaveRequests, settings, profile]);
+
+  const userLateCountThisMonth = React.useMemo(() => {
+    if (!user || profile?.role === 'admin') return 0;
+    const shiftStart = settings?.shiftStart || '08:00';
+    const [year, month] = selectedMonth.split('-');
+    let lateCount = 0;
+    
+    const userLogs = logs.filter(l => l.userId === user.uid && !l.deleted && l.type === 'in');
+    
+    // Her günün sadece ilk girişini kontrol et
+    const firstInsPerDay = new Map<string, string>(); // date -> time
+    userLogs.forEach(l => {
+      const dateStr = format(l.timestamp?.toDate() || new Date(), 'yyyy-MM-dd');
+      if (!dateStr.startsWith(selectedMonth)) return;
+      const timeStr = format(l.timestamp?.toDate() || new Date(), 'HH:mm');
+      if (!firstInsPerDay.has(dateStr) || timeStr < firstInsPerDay.get(dateStr)!) {
+        firstInsPerDay.set(dateStr, timeStr);
+      }
+    });
+
+    firstInsPerDay.forEach((time) => {
+      if (time > shiftStart) lateCount++;
+    });
+
+    return lateCount;
+  }, [logs, selectedMonth, user, profile, settings]);
+
+  // (Silinen duplicate blok)
   const [editingOvertime, setEditingOvertime] = useState<OvertimeRequest | null>(null);
   const [deletingOvertime, setDeletingOvertime] = useState<OvertimeRequest | null>(null);
   const [selectedDayDetails, setSelectedDayDetails] = useState<{ date: string, userId: string } | null>(null);
@@ -1628,9 +1707,9 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-transparent pb-24 text-zinc-100">
+    <div className="min-h-screen theme-bg-base pb-24 theme-text transition-colors duration-200">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-white/5 bg-black/40 backdrop-blur-2xl">
+      <header className="sticky top-0 z-50 border-b theme-border-subtle bg-black/5 backdrop-blur-2xl">
         <div className="mx-auto flex max-w-4xl items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500 text-white">
@@ -1641,20 +1720,29 @@ export default function App() {
               <p className="text-[10px] uppercase tracking-widest text-zinc-500">Personel Takip</p>
             </div>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             <div className="hidden text-right md:block">
-              <p className="text-sm font-medium">{profile?.name}</p>
+              <p className="text-sm font-medium theme-text">{profile?.name}</p>
               <p className="text-xs text-zinc-500">{profile?.role === 'admin' ? 'Yönetici' : 'Personel'}</p>
             </div>
+
+            {/* Tema Değiştirici */}
+            <button
+              onClick={cycleTheme}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900/10 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-orange-500"
+              title={`Tema: ${theme === 'dark' ? 'Koyu' : theme === 'light' ? 'Açık' : 'Sistem'}`}
+            >
+              {theme === 'dark' ? <Moon size={18} /> : theme === 'light' ? <Sun size={18} /> : <Monitor size={18} />}
+            </button>
             
             <div className="relative">
               <button 
                 onClick={() => setShowNotifications(!showNotifications)}
-                className="group relative flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
+                className="group relative flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900/10 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-orange-500"
               >
                 <Bell size={20} />
                 {notifications.some(n => !n.read) && (
-                  <span className="absolute top-0 right-0 h-3 w-3 rounded-full border-2 border-zinc-950 bg-red-500" />
+                  <span className="absolute top-0 right-0 h-3 w-3 rounded-full border-2 border-zinc-50 dark:border-zinc-950 bg-red-500" />
                 )}
               </button>
 
@@ -1825,30 +1913,63 @@ export default function App() {
             </div>
 
 
+            {/* Yönetici Dashboard Özet */}
+            {profile?.role === 'admin' && dashboardStats && (
+              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded-2xl border theme-border bg-emerald-500/10 p-4">
+                  <div className="text-2xl font-black text-emerald-500">{dashboardStats.present}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-600/70">Şu An Ofiste</div>
+                </div>
+                <div className="rounded-2xl border theme-border bg-orange-500/10 p-4">
+                  <div className="text-2xl font-black text-orange-500">{dashboardStats.onLeave}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-orange-600/70">İzinli</div>
+                </div>
+                <div className="rounded-2xl border theme-border bg-red-500/10 p-4">
+                  <div className="text-2xl font-black text-red-500">{dashboardStats.late}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-red-600/70">Geç Kalan</div>
+                </div>
+                <div className="rounded-2xl border theme-border theme-bg-secondary p-4">
+                  <div className="text-2xl font-black theme-text">{dashboardStats.absent}</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Gelmeyen</div>
+                </div>
+              </div>
+            )}
+
+            {/* Personel Geç Kalma Uyarısı */}
+            {profile?.role !== 'admin' && userLateCountThisMonth > 0 && (
+              <div className="mb-6 flex items-center gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 p-4">
+                <AlertTriangle size={24} className="text-red-500 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold text-red-500">Geç Kalma Uyarısı</p>
+                  <p className="text-xs text-red-500/70">Bu ay içerisinde <strong>{userLateCountThisMonth} kez</strong> mesai başlangıç saati ({settings?.shiftStart || '08:00'}) sonrasında giriş yaptınız.</p>
+                </div>
+              </div>
+            )}
+
             {/* Info Cards */}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-zinc-900 bg-zinc-900/30 p-4">
+              <div className="rounded-2xl border theme-border theme-bg-secondary p-4">
                 <div className="mb-2 flex items-center gap-2 text-zinc-500">
                   {isOnline ? <Wifi size={16} /> : <WifiOff size={16} className="text-amber-400" />}
                   <span className="text-xs font-semibold uppercase tracking-wider">Ağ Durumu</span>
                 </div>
-                <p className="text-sm font-medium">{isOnline ? (currentIp || 'Tespit ediliyor...') : 'Çevrimdışı'}</p>
+                <p className="text-sm font-medium theme-text">{isOnline ? (currentIp || 'Tespit ediliyor...') : 'Çevrimdışı'}</p>
                 <p className="text-[10px] text-zinc-600">Mevcut IP Adresiniz</p>
               </div>
-              <div className="rounded-2xl border border-zinc-900 bg-zinc-900/30 p-4">
+              <div className="rounded-2xl border theme-border theme-bg-secondary p-4">
                 <div className="mb-2 flex items-center gap-2 text-zinc-500">
                   <MapPin size={16} />
                   <span className="text-xs font-semibold uppercase tracking-wider">Konum</span>
                 </div>
-                <p className="text-sm font-medium">Aktif</p>
+                <p className="text-sm font-medium theme-text">Aktif</p>
                 <p className="text-[10px] text-zinc-600">GPS Doğrulaması</p>
               </div>
-              <div className="rounded-2xl border border-zinc-900 bg-zinc-900/30 p-4">
+              <div className="rounded-2xl border theme-border theme-bg-secondary p-4">
                 <div className="mb-2 flex items-center gap-2 text-zinc-500">
                   <Shield size={16} />
                   <span className="text-xs font-semibold uppercase tracking-wider">Güvenlik</span>
                 </div>
-                <p className="text-sm font-medium">QR + IP Korumalı</p>
+                <p className="text-sm font-medium theme-text">QR + IP Korumalı</p>
                 <p className="text-[10px] text-zinc-600">Sistem Durumu</p>
               </div>
             </div>
@@ -1923,6 +2044,8 @@ export default function App() {
                     ).reduce((sum, r) => sum + r.hours, 0);
 
                     const isFuture = dayDate > today;
+                    const holiday = getHoliday(dateStr);
+                    const isHolidayDay = !!holiday;
                     const hasSuccessLogs = dayInLogs.some(l => l.status !== 'error' && !l.deleted);
                     const hasErrorLogs = dayInLogs.some(l => l.status === 'error' && !l.deleted);
 
@@ -1935,16 +2058,24 @@ export default function App() {
                             hasErrorLogs && !hasSuccessLogs ? "border-red-500/30 bg-red-500/5" :
                             hasSuccessLogs ? "border-emerald-500/30 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.05)]" : 
                             leave ? "border-orange-500/30 bg-orange-500/5 shadow-[0_0_10px_rgba(249,115,22,0.1)]" : 
+                            isHolidayDay ? "border-red-500/30 bg-red-500/5 shadow-[0_0_10px_rgba(239,68,68,0.1)]" :
                             isSunday ? "border-zinc-900 bg-zinc-950/30" : 
                             isFuture ? "border-zinc-900/30 bg-transparent opacity-30" : "border-zinc-900 bg-zinc-950/10"
                           )}
                         >
                           <span className={cn(
                             "text-[8px] font-bold absolute top-1 left-1.5",
-                            isSunday ? "text-red-500/50" : "text-zinc-600"
+                            (isSunday || isHolidayDay) ? "text-red-500/50" : "text-zinc-600"
                           )}>
                             {d}
                           </span>
+                          
+                          {isHolidayDay && !hasSuccessLogs && !leave && (
+                            <span className="hidden sm:block absolute top-1 right-1 text-[7px] font-black text-red-500 uppercase max-w-[70%] text-right truncate">
+                              {holiday.name}
+                            </span>
+                          )}
+
                           
                           <div className="flex-1 flex flex-col items-start justify-center w-full gap-1 mt-3 px-1">
                             {hasSuccessLogs && (
