@@ -127,6 +127,7 @@ export default function App() {
   const [leaveType, setLeaveType] = useState<'annual' | 'report' | 'excuse'>('annual');
   const [reportFile, setReportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [viewingAttachment, setViewingAttachment] = useState<string | null>(null);
 
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [deletionReason, setDeletionReason] = useState<string>('');
@@ -1418,16 +1419,8 @@ export default function App() {
     }
   };
 
-  const handleViewAttachment = async (base64Str: string) => {
-    try {
-      const res = await fetch(base64Str);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-    } catch (e) {
-      console.error('Belge görüntülenemedi', e);
-      setStatus({ type: 'error', message: 'Belge açılırken bir hata oluştu.' });
-    }
+  const handleViewAttachment = (base64Str: string) => {
+    setViewingAttachment(base64Str);
   };
   const submitOvertimeRequest = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -4622,6 +4615,34 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Belge Görüntüleyici Modal */}
+      {viewingAttachment && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/90 p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-4xl bg-zinc-900 rounded-2xl overflow-hidden flex flex-col border border-zinc-800 h-[80vh] shadow-2xl">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-800 bg-zinc-950">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                <FileText size={18} className="text-emerald-500"/> Belge Görüntüleyici
+              </h3>
+              <button onClick={() => setViewingAttachment(null)} className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 bg-black/80 p-2 sm:p-4 flex items-center justify-center overflow-auto relative">
+              {viewingAttachment.startsWith('data:image') ? (
+                <img src={viewingAttachment} alt="Rapor Belgesi" className="max-w-full max-h-full object-contain rounded-lg" />
+              ) : (
+                <iframe src={viewingAttachment} className="w-full h-full bg-white rounded-lg border-0" title="PDF Görüntüleyici" />
+              )}
+            </div>
+            <div className="p-4 bg-zinc-950 border-t border-zinc-800 flex justify-end gap-3">
+              <a href={viewingAttachment} download="rapor_belgesi" className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition-colors shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+                <Download size={16} /> Cihaza İndir
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       </main>
 
