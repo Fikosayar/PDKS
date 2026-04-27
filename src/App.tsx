@@ -526,18 +526,27 @@ export default function App() {
   // Notifications listener
   useEffect(() => {
     if (!user) return;
+    // createdAt karışık formatlarda (string ve Timestamp) gelebilir;
+    // Firestore index gerektirmeyen basit query kullan, sıralamayı client'ta yap
     const q = query(
       collection(db, 'notifications'), 
-      where('userId', '==', user.uid), 
-      orderBy('createdAt', 'desc'), 
-      limit(50)
+      where('userId', '==', user.uid),
+      limit(100)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const newNotifs = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as SystemNotification[];
-      setNotifications(newNotifs);
+      // Client-side sıralama: en yeni önce
+      newNotifs.sort((a: any, b: any) => {
+        const aTime = a.createdAt?.toDate?.()?.getTime?.() ?? (typeof a.createdAt === 'string' ? new Date(a.createdAt).getTime() : 0);
+        const bTime = b.createdAt?.toDate?.()?.getTime?.() ?? (typeof b.createdAt === 'string' ? new Date(b.createdAt).getTime() : 0);
+        return bTime - aTime;
+      });
+      setNotifications(newNotifs.slice(0, 50));
+    }, (error) => {
+      console.warn('Notifications listener error:', error.message);
     });
     return unsubscribe;
   }, [user]);
@@ -4755,6 +4764,7 @@ export default function App() {
         leaveRequests={leaveRequests}
         overtimeRequests={overtimeRequests}
         notifications={notifications}
+        logs={logs}
       />
     </div>
   );

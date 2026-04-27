@@ -10,7 +10,7 @@ import {
   User as UserIcon 
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { UserProfile, LeaveRequest, OvertimeRequest, SystemNotification } from '../types';
+import { UserProfile, AttendanceLog, LeaveRequest, OvertimeRequest, SystemNotification } from '../types';
 
 interface BottomNavProps {
   activeTab: string;
@@ -21,6 +21,7 @@ interface BottomNavProps {
   leaveRequests: LeaveRequest[];
   overtimeRequests: OvertimeRequest[];
   notifications: SystemNotification[];
+  logs: AttendanceLog[];
 }
 
 export default function BottomNav({
@@ -31,7 +32,8 @@ export default function BottomNav({
   allUsers,
   leaveRequests,
   overtimeRequests,
-  notifications
+  notifications,
+  logs
 }: BottomNavProps) {
   const handleTabClick = (tab: string) => {
     if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
@@ -83,11 +85,15 @@ export default function BottomNav({
               <div className="relative">
                 <CheckCircle2 size={22} strokeWidth={activeTab === 'approvals' ? 2.5 : 2} />
                 {(() => {
-                  const pendingCount = leaveRequests.filter(r => r.status === 'pending' && r.managerId === user?.uid).length + 
-                                     overtimeRequests.filter(r => r.status === 'pending' && r.managerId === user?.uid).length;
+                  // Kendi altındaki personelin bekleyen talepleri
+                  const mySubordinateIds = allUsers.filter(u => u.managerId === user?.uid).map(u => u.uid);
+                  const pendingLeave = leaveRequests.filter(r => r.status === 'pending' && mySubordinateIds.includes(r.userId)).length;
+                  const pendingOvertime = overtimeRequests.filter(r => r.status === 'pending' && mySubordinateIds.includes(r.userId)).length;
+                  const pendingManual = logs.filter(l => l.status === 'pending' && l.manualEntry && mySubordinateIds.includes(l.userId)).length;
+                  const pendingCount = pendingLeave + pendingOvertime + pendingManual;
                   return pendingCount > 0 && (
                     <span className="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-black text-white shadow-lg ring-2 ring-zinc-900">
-                      {pendingCount}
+                      {pendingCount > 9 ? '9+' : pendingCount}
                     </span>
                   );
                 })()}
