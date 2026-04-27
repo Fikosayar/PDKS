@@ -3881,6 +3881,104 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Profil Fotoğrafı Yönetimi */}
+                <div className="flex items-center gap-5 p-4 rounded-2xl border border-zinc-800 bg-zinc-900/30">
+                  <div className="relative group shrink-0">
+                    {editingUser.avatarUrl ? (
+                      <img src={editingUser.avatarUrl} alt={editingUser.name} className="h-20 w-20 rounded-full object-cover border-4 border-orange-500/30" />
+                    ) : (
+                      <div className="h-20 w-20 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 text-2xl font-black border-4 border-orange-500/10">
+                        {editingUser.name[0]}
+                      </div>
+                    )}
+                    <label className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
+                      <Camera size={20} className="text-white" />
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setAvatarUploading(true);
+                          try {
+                            const avatarBase64 = await new Promise<string>((resolve, reject) => {
+                              const img = new Image();
+                              const objectUrl = URL.createObjectURL(file);
+                              img.onload = () => {
+                                const maxSize = 256;
+                                const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+                                const canvas = document.createElement('canvas');
+                                canvas.width = img.width * scale;
+                                canvas.height = img.height * scale;
+                                canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                URL.revokeObjectURL(objectUrl);
+                                resolve(canvas.toDataURL('image/jpeg', 0.8));
+                              };
+                              img.onerror = () => reject(new Error('Resim yüklenemedi.'));
+                              img.src = objectUrl;
+                            });
+                            await updateDoc(doc(db, 'users', editingUser.uid), { avatarUrl: avatarBase64 });
+                            setEditingUser(prev => prev ? { ...prev, avatarUrl: avatarBase64 } : prev);
+                            // Personele bildirim gönder
+                            await addDoc(collection(db, 'notifications'), {
+                              userId: editingUser.uid,
+                              title: 'Profil Fotoğrafınız Güncellendi',
+                              message: `${profile?.name || 'Yöneticiniz'} profil fotoğrafınızı güncelledi.`,
+                              type: 'info',
+                              read: false,
+                              link: '/profile',
+                              createdAt: new Date().toISOString(),
+                            });
+                            setStatus({ type: 'success', message: `${editingUser.name} için profil fotoğrafı güncellendi.` });
+                          } catch (err: any) {
+                            setStatus({ type: 'error', message: 'Fotoğraf yüklenemedi: ' + err.message });
+                          } finally {
+                            setAvatarUploading(false);
+                            e.target.value = '';
+                          }
+                        }}
+                      />
+                    </label>
+                    {avatarUploading && (
+                      <div className="absolute inset-0 rounded-full bg-black/60 flex items-center justify-center">
+                        <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-sm mb-1">Profil Fotoğrafı</p>
+                    <p className="text-[11px] text-zinc-500 mb-3">Resmin üzerine tıklayarak fotoğrafı değiştirebilirsiniz. Değişiklik personele bildirim olarak iletilir.</p>
+                    {editingUser.avatarUrl && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm('Profil fotoğrafı silinsin mi?')) return;
+                          try {
+                            await updateDoc(doc(db, 'users', editingUser.uid), { avatarUrl: null });
+                            setEditingUser(prev => prev ? { ...prev, avatarUrl: undefined } : prev);
+                            await addDoc(collection(db, 'notifications'), {
+                              userId: editingUser.uid,
+                              title: 'Profil Fotoğrafınız Silindi',
+                              message: `${profile?.name || 'Yöneticiniz'} profil fotoğrafınızı kaldırdı.`,
+                              type: 'info',
+                              read: false,
+                              link: '/profile',
+                              createdAt: new Date().toISOString(),
+                            });
+                            setStatus({ type: 'success', message: 'Fotoğraf silindi.' });
+                          } catch (err: any) {
+                            setStatus({ type: 'error', message: 'Silinemedi: ' + err.message });
+                          }
+                        }}
+                        className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-[11px] font-bold text-red-500 hover:bg-red-500/20 transition-colors"
+                      >
+                        <Trash2 size={11} /> Fotoğrafı Kaldır
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <form onSubmit={handleUpdateUser} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-semibold text-zinc-500 uppercase">Ad Soyad</label>
