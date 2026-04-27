@@ -3739,20 +3739,35 @@ export default function App() {
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
                     className="hidden"
-                    onChange={async (e) => {
+                   onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (!file || !user) return;
-                      if (file.size > 5 * 1024 * 1024) {
-                        setStatus({ type: 'error', message: 'Fotoğraf en fazla 5MB olabilir.' });
+                      if (file.size > 8 * 1024 * 1024) {
+                        setStatus({ type: 'error', message: 'Fotoğraf en fazla 8MB olabilir.' });
                         return;
                       }
                       setAvatarUploading(true);
                       try {
-                        const storageRef = ref(storage, `avatars/${user.uid}`);
-                        await uploadBytes(storageRef, file);
-                        const downloadUrl = await getDownloadURL(storageRef);
-                        await updateDoc(doc(db, 'users', user.uid), { avatarUrl: downloadUrl });
-                        setProfile(prev => prev ? { ...prev, avatarUrl: downloadUrl } : prev);
+                        // Canvas ile yeniden boyutlandır ve sıkıştır (Firebase Storage yerine)
+                        const avatarBase64 = await new Promise<string>((resolve, reject) => {
+                          const img = new Image();
+                          const objectUrl = URL.createObjectURL(file);
+                          img.onload = () => {
+                            const maxSize = 256;
+                            const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+                            const canvas = document.createElement('canvas');
+                            canvas.width = img.width * scale;
+                            canvas.height = img.height * scale;
+                            const ctx = canvas.getContext('2d')!;
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            URL.revokeObjectURL(objectUrl);
+                            resolve(canvas.toDataURL('image/jpeg', 0.8));
+                          };
+                          img.onerror = () => reject(new Error('Resim yüklenemedi.'));
+                          img.src = objectUrl;
+                        });
+                        await updateDoc(doc(db, 'users', user.uid), { avatarUrl: avatarBase64 });
+                        setProfile(prev => prev ? { ...prev, avatarUrl: avatarBase64 } : prev);
                         setStatus({ type: 'success', message: 'Profil fotoğrafı güncellendi.' });
                       } catch (err: any) {
                         setStatus({ type: 'error', message: 'Fotoğraf yüklenemedi: ' + err.message });
@@ -3786,8 +3801,6 @@ export default function App() {
                         if (!user) return;
                         if (!window.confirm('Profil fotoğrafı silinsin mi?')) return;
                         try {
-                          const storageRef = ref(storage, `avatars/${user.uid}`);
-                          await deleteObject(storageRef).catch(() => {}); // yoksa hata verme
                           await updateDoc(doc(db, 'users', user.uid), { avatarUrl: null });
                           setProfile(prev => prev ? { ...prev, avatarUrl: undefined } : prev);
                           setStatus({ type: 'success', message: 'Profil fotoğrafı silindi.' });
