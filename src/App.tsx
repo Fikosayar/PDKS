@@ -1418,6 +1418,17 @@ export default function App() {
     }
   };
 
+  const handleViewAttachment = async (base64Str: string) => {
+    try {
+      const res = await fetch(base64Str);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (e) {
+      console.error('Belge görüntülenemedi', e);
+      setStatus({ type: 'error', message: 'Belge açılırken bir hata oluştu.' });
+    }
+  };
   const submitOvertimeRequest = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!user || !profile) return;
@@ -4198,14 +4209,12 @@ export default function App() {
                           </div>
                           
                           {req.attachmentUrl && (
-                            <a 
-                              href={req.attachmentUrl} 
-                              target="_blank" 
-                              rel="noopener noreferrer"
+                            <button 
+                              onClick={() => handleViewAttachment(req.attachmentUrl!)}
                               className="flex items-center gap-2 rounded-lg bg-zinc-950 p-2 text-[10px] font-bold text-emerald-400 hover:bg-zinc-900 transition-colors mt-2"
                             >
-                              <Download size={14} /> Rapor Dosyasını Görüntüle (PDF)
-                            </a>
+                              <Download size={14} /> Rapor Belgesini Görüntüle
+                            </button>
                           )}
                           <p className="text-[10px] text-zinc-500 italic">"{req.reason}"</p>
                         </div>
