@@ -77,7 +77,8 @@ import {
   Monitor,
   BarChart3,
   AlertTriangle,
-  TrendingDown
+  TrendingDown,
+  UserX
 } from 'lucide-react';
 
 import { format } from 'date-fns';
@@ -144,6 +145,7 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+  const [dashboardStatModal, setDashboardStatModal] = useState<null | { title: string; color: string; icon: React.ReactNode; people: { name: string; detail: string; uid: string }[] }>(null);
 
   // Tema sistemi
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
@@ -329,14 +331,41 @@ export default function App() {
       if (time > shiftStart) lateCount++;
     });
 
+    // Gelmeyen listesi: aktif, izinli değil, bugün hiç giriş yapmamış
+    const lateIds = new Set<string>();
+    userFirstIn.forEach((time, uid) => { if (time > shiftStart) lateIds.add(uid); });
+    const absentUserIds = new Set<string>();
+    activeUsers.forEach(u => {
+      if (!presentIds.has(u.uid) && !onLeaveIds.has(u.uid)) absentUserIds.add(u.uid);
+    });
+
+    // Kişi listelerini de döndür
+    const userMap = new Map(activeUsers.map(u => [u.uid, u]));
+    const presentList = [...presentIds].map(uid => {
+      const u = userMap.get(uid);
+      return { uid, name: u?.name || uid, detail: `Giriş: ${userFirstIn.get(uid) || '-'}` };
+    });
+    const onLeaveList = [...onLeaveIds].map(uid => {
+      const u = userMap.get(uid);
+      return { uid, name: u?.name || uid, detail: u?.title || 'İzinli' };
+    });
+    const lateList = [...lateIds].map(uid => {
+      const u = userMap.get(uid);
+      return { uid, name: u?.name || uid, detail: `Giriş: ${userFirstIn.get(uid) || '-'}` };
+    });
+    const absentList = [...absentUserIds].map(uid => {
+      const u = userMap.get(uid);
+      return { uid, name: u?.name || uid, detail: u?.title || 'Personel' };
+    });
+
     const absentCount = Math.max(0, activeUsers.length - presentIds.size - onLeaveIds.size);
 
     return {
       totalStaff: activeUsers.length,
-      present: presentIds.size,
-      onLeave: onLeaveIds.size,
-      late: lateCount,
-      absent: absentCount,
+      present: presentIds.size, presentList,
+      onLeave: onLeaveIds.size, onLeaveList,
+      late: lateIds.size, lateList,
+      absent: absentCount, absentList,
     };
   }, [logs, allUsers, leaveRequests, settings, profile]);
 
@@ -2083,22 +2112,38 @@ export default function App() {
             {/* Yönetici Dashboard Özet */}
             {profile?.role === 'admin' && dashboardStats && (
               <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="rounded-2xl border theme-border bg-emerald-500/10 p-4">
+                <button
+                  onClick={() => setDashboardStatModal({ title: 'Şu An Ofiste', color: 'emerald', icon: <LogIn size={18} />, people: dashboardStats.presentList })}
+                  className="rounded-2xl border theme-border bg-emerald-500/10 p-4 text-left hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                >
                   <div className="text-2xl font-black text-emerald-500">{dashboardStats.present}</div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-600/70">Şu An Ofiste</div>
-                </div>
-                <div className="rounded-2xl border theme-border bg-orange-500/10 p-4">
+                  <div className="text-[9px] text-emerald-700/60 mt-1">Detay için tıkla</div>
+                </button>
+                <button
+                  onClick={() => setDashboardStatModal({ title: 'İzinli', color: 'orange', icon: <FileText size={18} />, people: dashboardStats.onLeaveList })}
+                  className="rounded-2xl border theme-border bg-orange-500/10 p-4 text-left hover:bg-orange-500/20 transition-colors cursor-pointer"
+                >
                   <div className="text-2xl font-black text-orange-500">{dashboardStats.onLeave}</div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-orange-600/70">İzinli</div>
-                </div>
-                <div className="rounded-2xl border theme-border bg-red-500/10 p-4">
+                  <div className="text-[9px] text-orange-700/60 mt-1">Detay için tıkla</div>
+                </button>
+                <button
+                  onClick={() => setDashboardStatModal({ title: 'Geç Kalan', color: 'red', icon: <Clock size={18} />, people: dashboardStats.lateList })}
+                  className="rounded-2xl border theme-border bg-red-500/10 p-4 text-left hover:bg-red-500/20 transition-colors cursor-pointer"
+                >
                   <div className="text-2xl font-black text-red-500">{dashboardStats.late}</div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-red-600/70">Geç Kalan</div>
-                </div>
-                <div className="rounded-2xl border theme-border theme-bg-secondary p-4">
+                  <div className="text-[9px] text-red-700/60 mt-1">Detay için tıkla</div>
+                </button>
+                <button
+                  onClick={() => setDashboardStatModal({ title: 'Gelmeyen', color: 'zinc', icon: <UserX size={18} />, people: dashboardStats.absentList })}
+                  className="rounded-2xl border theme-border theme-bg-secondary p-4 text-left hover:bg-zinc-800/40 transition-colors cursor-pointer"
+                >
                   <div className="text-2xl font-black theme-text">{dashboardStats.absent}</div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">Gelmeyen</div>
-                </div>
+                  <div className="text-[9px] text-zinc-600 mt-1">Detay için tıkla</div>
+                </button>
               </div>
             )}
 
@@ -4144,6 +4189,73 @@ export default function App() {
                 </div>
                 <button type="submit" className="w-full rounded-xl bg-orange-500 py-4 font-bold text-white transition-colors hover:bg-orange-600">Güncelle</button>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Dashboard Stat Detail Modal */}
+      <AnimatePresence>
+        {dashboardStatModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setDashboardStatModal(null)} className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-sm rounded-3xl border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden"
+            >
+              {/* Header */}
+              <div className={cn(
+                "px-6 py-5 flex items-center justify-between",
+                dashboardStatModal.color === 'emerald' ? "bg-emerald-500/10 border-b border-emerald-500/20" :
+                dashboardStatModal.color === 'orange' ? "bg-orange-500/10 border-b border-orange-500/20" :
+                dashboardStatModal.color === 'red' ? "bg-red-500/10 border-b border-red-500/20" :
+                "bg-zinc-900/40 border-b border-zinc-800"
+              )}>
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    "p-2 rounded-xl",
+                    dashboardStatModal.color === 'emerald' ? "bg-emerald-500/20 text-emerald-400" :
+                    dashboardStatModal.color === 'orange' ? "bg-orange-500/20 text-orange-400" :
+                    dashboardStatModal.color === 'red' ? "bg-red-500/20 text-red-400" :
+                    "bg-zinc-800 text-zinc-400"
+                  )}>
+                    {dashboardStatModal.icon}
+                  </div>
+                  <div>
+                    <p className="font-black text-white">{dashboardStatModal.title}</p>
+                    <p className="text-xs text-zinc-400">{dashboardStatModal.people.length} kişi · Bugün</p>
+                  </div>
+                </div>
+                <button onClick={() => setDashboardStatModal(null)} className="rounded-full bg-zinc-800/60 p-2 text-zinc-400 hover:bg-zinc-700">
+                  <X size={18} />
+                </button>
+              </div>
+              {/* List */}
+              <div className="max-h-[60vh] overflow-y-auto divide-y divide-zinc-900">
+                {dashboardStatModal.people.length === 0 ? (
+                  <div className="p-10 text-center text-zinc-500 text-sm">Bu kategoride kimse yok.</div>
+                ) : (
+                  dashboardStatModal.people.map(p => (
+                    <div key={p.uid} className="flex items-center gap-4 px-6 py-4 hover:bg-zinc-900/40 transition-colors">
+                      <div className={cn(
+                        "h-9 w-9 rounded-full flex items-center justify-center text-sm font-black shrink-0",
+                        dashboardStatModal.color === 'emerald' ? "bg-emerald-500/20 text-emerald-400" :
+                        dashboardStatModal.color === 'orange' ? "bg-orange-500/20 text-orange-400" :
+                        dashboardStatModal.color === 'red' ? "bg-red-500/20 text-red-400" :
+                        "bg-zinc-800 text-zinc-400"
+                      )}>
+                        {p.name[0]?.toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-white truncate">{p.name}</p>
+                        <p className="text-[11px] text-zinc-500 truncate">{p.detail}</p>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </motion.div>
           </div>
         )}
