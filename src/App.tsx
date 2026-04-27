@@ -279,31 +279,67 @@ export default function App() {
     }
   };
 
-  // --- İSTATİSTİKLER VE GEÇ KALMA HESAPLAMALARI ---
   const dashboardStats = React.useMemo(() => {
     if (!profile || profile.role !== 'admin') return null;
     const todayStr = format(new Date(), 'yyyy-MM-dd');
-    const todayLogs = logs.filter(l => !l.deleted && format(l.timestamp?.toDate() || new Date(), 'yyyy-MM-dd') === todayStr);
-    
-    const uniquePresentIds = new Set(todayLogs.filter(l => l.type === 'in').map(l => l.userId));
-    const onLeaveIds = new Set(leaveRequests.filter(r => r.status === 'approved' && !r.deleted && r.startDate <= todayStr && r.endDate >= todayStr).map(r => r.userId));
-    
-    // Geç kalanlar (Shift Start'tan sonra 'in' basanlar)
     const shiftStart = settings?.shiftStart || '08:00';
+
+    // Sadece aktif personel (silinmemiş)
+    const activeUsers = allUsers.filter(u => u.role !== 'deleted');
+
+    // Bugünün onaylı logları (pending dahil değil)
+    const todayLogs = logs.filter(l =>
+      !l.deleted &&
+      l.status !== 'pending' &&
+      l.status !== 'error' &&
+      l.timestamp?.toDate &&
+      format(l.timestamp.toDate(), 'yyyy-MM-dd') === todayStr
+    );
+
+    // Her personel için bugünkü en son durumu belirle (son log out mu in mi?)
+    const userLastAction = new Map<string, string>(); // userId -> 'in' | 'out'
+    const userFirstIn = new Map<string, string>();     // userId -> 'HH:mm' (ilk giriş saati)
+
+    todayLogs
+      .sort((a, b) => (a.timestamp.toDate().getTime()) - (b.timestamp.toDate().getTime()))
+      .forEach(l => {
+        userLastAction.set(l.userId, l.type);
+        if (l.type === 'in' && !userFirstIn.has(l.userId)) {
+          userFirstIn.set(l.userId, format(l.timestamp.toDate(), 'HH:mm'));
+        }
+      });
+
+    // Şu an ofiste: son hareketi 'in' olanlar
+    const presentIds = new Set<string>();
+    userLastAction.forEach((type, uid) => {
+      if (type === 'in') presentIds.add(uid);
+    });
+
+    // İzinli bugün
+    const onLeaveIds = new Set(
+      leaveRequests.filter(r =>
+        r.status === 'approved' && !r.deleted &&
+        r.startDate <= todayStr && r.endDate >= todayStr
+      ).map(r => r.userId)
+    );
+
+    // Geç kalanlar: ilk giriş saati mesai başından sonra olan kişiler (kişi başı 1 kez)
     let lateCount = 0;
-    todayLogs.filter(l => l.type === 'in').forEach(l => {
-      const time = format(l.timestamp?.toDate() || new Date(), 'HH:mm');
+    userFirstIn.forEach((time) => {
       if (time > shiftStart) lateCount++;
     });
 
+    const absentCount = Math.max(0, activeUsers.length - presentIds.size - onLeaveIds.size);
+
     return {
-      totalStaff: allUsers.length,
-      present: uniquePresentIds.size,
+      totalStaff: activeUsers.length,
+      present: presentIds.size,
       onLeave: onLeaveIds.size,
       late: lateCount,
-      absent: allUsers.length - uniquePresentIds.size - onLeaveIds.size
+      absent: absentCount,
     };
   }, [logs, allUsers, leaveRequests, settings, profile]);
+
 
   const userLateCountThisMonth = React.useMemo(() => {
     if (!user || profile?.role === 'admin') return 0;
