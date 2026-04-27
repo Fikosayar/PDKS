@@ -388,10 +388,11 @@ async function startServer() {
     if (!db) return res.status(500).json({ error: 'Database not ready' });
     const { targetUid, isApproved, requestType, actorName } = req.body;
     const statusText = isApproved ? 'Onaylandı ✅' : 'Reddedildi ❌';
-    const typeText = requestType === 'leave' ? 'İzin Talebi' : 'Mesai Talebi';
+    const typeText = requestType === 'leave' ? 'İzin Talebi' : requestType === 'manual' ? 'Manuel Kayıt' : 'Mesai Talebi';
     const title = `${typeText} ${statusText}`;
     const body = `${actorName} tarafından ${isApproved ? 'onaylanmıştır' : 'reddedilmiştir'}.`;
-    const link = requestType === 'leave' ? '/izinler' : '/mesai';
+    // Yönlendirme: onaylanan manuel kayıtlar -> takvim, izin -> izinler, mesai -> mesai
+    const link = requestType === 'leave' ? '/takvim' : requestType === 'manual' ? '/takvim' : '/mesai';
     
     try {
       await sendPushToUser(db, targetUid, title, body, link);
@@ -426,8 +427,19 @@ async function startServer() {
       const body = isRemote && remoteNote 
         ? `Not: ${remoteNote}` 
         : `${new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' })} saatinde ${typeText.toLowerCase()} yaptı.`;
-      
-      await sendPushToUser(db, managerId, title, body, '/hareketler');
+      const link = isRemote ? '/onaylar' : '/hareketler';
+
+      await sendPushToUser(db, managerId, title, body, link);
+      // Firestore'a bildirim kaydı ekle (uygulama içi bildirimleri için)
+      await addDoc(collection(db, 'notifications'), {
+        userId: managerId,
+        title,
+        message: body,
+        type: 'info',
+        read: false,
+        link,
+        createdAt: new Date().toISOString()
+      });
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

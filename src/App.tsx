@@ -1561,7 +1561,7 @@ export default function App() {
         body: JSON.stringify({
           targetUid: requestData.userId,
           isApproved: action === 'approved',
-          requestType: collectionName === 'leaveRequests' ? 'leave' : 'overtime',
+          requestType: collectionName === 'leaveRequests' ? 'leave' : collectionName === 'attendance' ? 'manual' : 'overtime',
           actorName: profile?.name || 'Yönetici'
         })
       }).catch(() => {});
@@ -1826,8 +1826,10 @@ export default function App() {
                 className="group relative flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900/10 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 transition-colors hover:bg-zinc-200 dark:hover:bg-zinc-800 hover:text-orange-500"
               >
                 <Bell size={20} />
-                {notifications.some(n => !n.read) && (
-                  <span className="absolute top-0 right-0 h-3 w-3 rounded-full border-2 border-zinc-50 dark:border-zinc-950 bg-red-500" />
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full border-2 border-white dark:border-zinc-950 bg-red-500 flex items-center justify-center text-[9px] font-black text-white">
+                    {notifications.filter(n => !n.read).length > 99 ? '99+' : notifications.filter(n => !n.read).length}
+                  </span>
                 )}
               </button>
 
@@ -1844,8 +1846,27 @@ export default function App() {
                       exit={{ opacity: 0, y: 10, scale: 0.95 }}
                       className="absolute right-0 mt-2 w-72 origin-top-right rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl z-20 overflow-hidden"
                     >
-                      <div className="border-b border-zinc-800 px-4 py-3 bg-zinc-800/50">
-                        <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Bildirimler</p>
+                      <div className="border-b border-zinc-800 px-4 py-3 bg-zinc-800/50 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold uppercase tracking-wider text-zinc-400">Bildirimler</p>
+                          {notifications.filter(n => !n.read).length > 0 && (
+                            <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 flex items-center justify-center text-[9px] font-black text-white">
+                              {notifications.filter(n => !n.read).length}
+                            </span>
+                          )}
+                        </div>
+                        {notifications.some(n => !n.read) && (
+                          <button
+                            onClick={async () => {
+                              for (const n of notifications.filter(x => !x.read)) {
+                                if (n.id) await markNotificationRead(n.id);
+                              }
+                            }}
+                            className="text-[10px] text-orange-500 font-bold hover:text-orange-400 transition"
+                          >
+                            Tümünü Okundu
+                          </button>
+                        )}
                       </div>
                       <div className="max-h-80 overflow-y-auto">
                         {notifications.length === 0 ? (
@@ -1858,7 +1879,6 @@ export default function App() {
                               key={notif.id}
                               onClick={() => {
                                 markNotificationRead(notif.id!);
-                                // Bildirime tıklandığında ilgili sayfaya git
                                 if (notif.link) {
                                   navigate(notif.link);
                                   setShowNotifications(false);
@@ -1879,17 +1899,21 @@ export default function App() {
                                   notif.type === 'success' ? "bg-emerald-500/10 text-emerald-500" :
                                   "bg-blue-500/10 text-blue-500"
                                 )}>
-                                  <Info size={12} />
+                                  {notif.type === 'success' ? <CheckCircle size={12} /> :
+                                   notif.type === 'error' ? <AlertCircle size={12} /> :
+                                   <Bell size={12} />}
                                 </div>
-                                <div className="space-y-1 flex-1">
-                                  <p className="text-xs font-bold leading-none">{notif.title}</p>
-                                  <p className="text-[10px] text-zinc-500 leading-relaxed">{notif.message}</p>
+                                <div className="space-y-1 flex-1 min-w-0">
+                                  <p className="text-xs font-bold leading-none truncate">{notif.title}</p>
+                                  <p className="text-[10px] text-zinc-500 leading-relaxed line-clamp-2">{notif.message}</p>
                                   <div className="flex items-center justify-between">
                                     <p className="text-[8px] text-zinc-600 uppercase font-black">
-                                      {notif.createdAt?.toDate ? format(notif.createdAt.toDate(), 'd MMM HH:mm') : ''}
+                                      {notif.createdAt?.toDate ? format(notif.createdAt.toDate(), 'd MMM HH:mm', { locale: tr }) : typeof notif.createdAt === 'string' ? notif.createdAt.slice(11,16) : ''}
                                     </p>
                                     {notif.link && (
-                                      <span className="text-[9px] text-orange-500 font-bold">Görüntüle →</span>
+                                      <span className="text-[9px] text-orange-500 font-bold flex items-center gap-0.5">
+                                        Git <ChevronRight size={8} />
+                                      </span>
                                     )}
                                   </div>
                                 </div>
@@ -1897,7 +1921,6 @@ export default function App() {
                             </div>
                           ))
                         )}
-
                       </div>
                     </motion.div>
                   </>

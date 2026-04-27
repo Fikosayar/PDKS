@@ -11,13 +11,21 @@ self.addEventListener('push', function(event) {
     data = { title: 'PDKS Bildirimi', body: event.data.text(), link: '/' };
   }
 
+  const link = data.link || '/';
+
   const options = {
     body: data.body,
     icon: '/logo192.png',
     badge: '/logo192.png',
-    data: { link: data.link || '/' },
-    requireInteraction: false,
+    data: { link },
+    requireInteraction: true,
     vibrate: [200, 100, 200],
+    tag: link, // Aynı sayfaya ait bildirimleri grupla
+    renotify: true,
+    actions: [
+      { action: 'open', title: 'Görüntüle' },
+      { action: 'dismiss', title: 'Kapat' }
+    ]
   };
 
   event.waitUntil(
@@ -27,7 +35,12 @@ self.addEventListener('push', function(event) {
 
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
+
+  // "Kapat" aksiyonuna basıldıysa sadece kapat
+  if (event.action === 'dismiss') return;
+
   const link = event.notification.data?.link || '/';
+  const targetUrl = self.location.origin + link;
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {
@@ -39,13 +52,14 @@ self.addEventListener('notificationclick', function(event) {
           return;
         }
       }
-      // Uygulama kapalıysa yeni sekme aç
+      // Uygulama kapalıysa yeni sekme aç ve doğru sayfaya git
       if (clients.openWindow) {
-        return clients.openWindow(self.location.origin + link);
+        return clients.openWindow(targetUrl);
       }
     })
   );
 });
+
 
 // Çevrimdışı kuyruğunu senkronize et (Background Sync API)
 self.addEventListener('sync', function(event) {
