@@ -1400,9 +1400,10 @@ export default function App() {
       setCalcLeaveDays(0);
       setReportFile(null);
       setLeaveType('annual');
-    } catch (error) {
+    } catch (error: any) {
       console.error("Leave request error:", error);
-      setStatus({ type: 'error', message: 'Talep iletilirken hata oluştu.' });
+      const msg = error?.message || 'Bilinmeyen bir hata oluştu.';
+      setStatus({ type: 'error', message: `Talep iletilirken hata oluştu: ${msg}` });
     } finally {
       setUploading(false);
     }
@@ -3166,19 +3167,6 @@ export default function App() {
                         <option value="excuse">Mazeret İzni</option>
                       </select>
                     </div>
-
-                    {leaveType === 'report' && (
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-500 uppercase">Rapor Belgesi</label>
-                        <input 
-                          type="file" 
-                          required 
-                          accept="image/*,.pdf"
-                          onChange={(e) => setReportFile(e.target.files?.[0] || null)}
-                          className="w-full text-sm text-zinc-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-500/10 file:text-orange-500 hover:file:bg-orange-500/20"
-                        />
-                      </div>
-                    )}
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1">
