@@ -425,7 +425,7 @@ async function startServer() {
       const title = `${userName} - ${typeText} Hareketi${remoteText}`;
       const body = isRemote && remoteNote 
         ? `Not: ${remoteNote}` 
-        : `${new Date().toLocaleTimeString('tr-TR')} saatinde ${typeText.toLowerCase()} yaptı.`;
+        : `${new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' })} saatinde ${typeText.toLowerCase()} yaptı.`;
       
       await sendPushToUser(db, managerId, title, body, '/hareketler');
       res.json({ success: true });
