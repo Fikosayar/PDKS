@@ -391,8 +391,8 @@ async function startServer() {
     const typeText = requestType === 'leave' ? 'İzin Talebi' : requestType === 'manual' ? 'Manuel Kayıt' : 'Mesai Talebi';
     const title = `${typeText} ${statusText}`;
     const body = `${actorName} tarafından ${isApproved ? 'onaylanmıştır' : 'reddedilmiştir'}.`;
-    // Yönlendirme: onaylanan manuel kayıtlar -> takvim, izin -> izinler, mesai -> mesai
-    const link = requestType === 'leave' ? '/takvim' : requestType === 'manual' ? '/takvim' : '/mesai';
+    // Yönlendirme: onaylanan kayıtlar -> doğru uygulama rotası
+    const link = requestType === 'leave' ? '/leaves' : requestType === 'manual' ? '/home' : '/leaves';
     
     try {
       await sendPushToUser(db, targetUid, title, body, link);
@@ -427,7 +427,7 @@ async function startServer() {
       const body = isRemote && remoteNote 
         ? `Not: ${remoteNote}` 
         : `${new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' })} saatinde ${typeText.toLowerCase()} yaptı.`;
-      const link = isRemote ? '/onaylar' : '/hareketler';
+      const link = isRemote ? '/approvals' : '/movements';
 
       await sendPushToUser(db, managerId, title, body, link);
       // Firestore'a bildirim kaydı ekle (uygulama içi bildirimleri için)
@@ -453,7 +453,7 @@ async function startServer() {
     const typeText = requestType === 'leave' ? 'İzin' : 'Mesai';
     const title = `Yeni ${typeText} Talebi`;
     const body = `${userName} yeni bir ${typeText.toLowerCase()} talebi oluşturdu.`;
-    const link = requestType === 'leave' ? '/izinler' : '/mesai';
+    const link = requestType === 'leave' ? '/approvals' : '/approvals';
     
     try {
       await sendPushToUser(db, managerId, title, body, link);

@@ -1889,7 +1889,17 @@ export default function App() {
                               onClick={() => {
                                 markNotificationRead(notif.id!);
                                 if (notif.link) {
-                                  navigate(notif.link);
+                                  // link -> uygulama rotası normalize et
+                                  const routeMap: Record<string, string> = {
+                                    '/takvim': '/home',
+                                    '/hareketler': '/movements',
+                                    '/izinler': '/leaves',
+                                    '/onaylar': '/approvals',
+                                    '/mesai': '/leaves',
+                                    '/profil': '/profile',
+                                  };
+                                  const route = routeMap[notif.link] ?? notif.link;
+                                  navigate(route);
                                   setShowNotifications(false);
                                 }
                               }}
@@ -1917,7 +1927,11 @@ export default function App() {
                                   <p className="text-[10px] text-zinc-500 leading-relaxed line-clamp-2">{notif.message}</p>
                                   <div className="flex items-center justify-between">
                                     <p className="text-[8px] text-zinc-600 uppercase font-black">
-                                      {notif.createdAt?.toDate ? format(notif.createdAt.toDate(), 'd MMM HH:mm', { locale: tr }) : typeof notif.createdAt === 'string' ? notif.createdAt.slice(11,16) : ''}
+                                      {notif.createdAt?.toDate
+                                        ? format(notif.createdAt.toDate(), 'd MMM HH:mm', { locale: tr })
+                                        : typeof notif.createdAt === 'string'
+                                          ? new Date(notif.createdAt).toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' }) + ' ' + new Date(notif.createdAt).toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul', day: 'numeric', month: 'short' })
+                                          : ''}
                                     </p>
                                     {notif.link && (
                                       <span className="text-[9px] text-orange-500 font-bold flex items-center gap-0.5">
