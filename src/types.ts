@@ -34,6 +34,7 @@ export interface UserProfile {
   deviceId?: string;
   pushSubscription?: string; // JSON string of PushSubscription
   canRemoteCheckIn?: boolean; // Nakliye/uzaktan giriş yetkisi
+  avatarUrl?: string; // Profil fotoğrafı URL
   createdAt: string;
 }
 

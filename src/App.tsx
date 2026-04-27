@@ -29,7 +29,7 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { auth, db, storage } from './lib/firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { UserProfile, AttendanceLog, GlobalSettings, LeaveRequest, OvertimeRequest, SystemNotification, RoleDefinition, OfflineQueueItem } from './types';
 import { subscribeToPush, requestNotificationPermission, showLocalNotification, VAPID_PUBLIC_KEY } from './lib/pushNotifications';
 import { addToOfflineQueue, getOfflineQueue, removeFromOfflineQueue } from './lib/offlineQueue';
@@ -78,7 +78,8 @@ import {
   BarChart3,
   AlertTriangle,
   TrendingDown,
-  UserX
+  UserX,
+  Camera
 } from 'lucide-react';
 
 import { format } from 'date-fns';
@@ -146,6 +147,8 @@ export default function App() {
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [dashboardStatModal, setDashboardStatModal] = useState<null | { title: string; color: string; icon: React.ReactNode; people: { name: string; detail: string; uid: string }[] }>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
 
   // Tema sistemi
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
@@ -2016,6 +2019,17 @@ export default function App() {
               </AnimatePresence>
             </div>
 
+            <button
+              onClick={() => { navigate('/profile'); }}
+              className="flex h-10 w-10 items-center justify-center rounded-full overflow-hidden bg-zinc-900 text-zinc-400 transition-colors hover:ring-2 hover:ring-orange-500 shrink-0"
+              title="Profil"
+            >
+              {profile?.avatarUrl ? (
+                <img src={profile.avatarUrl} alt={profile.name} className="h-full w-full object-cover" />
+              ) : (
+                <span className="text-sm font-black text-orange-500">{profile?.name?.[0]?.toUpperCase()}</span>
+              )}
+            </button>
             <button 
               onClick={handleLogout}
               className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-white"
@@ -2481,8 +2495,12 @@ export default function App() {
                       className="flex items-center justify-between rounded-2xl border border-zinc-900 bg-zinc-900/20 p-4 hover:bg-zinc-900/40 transition-colors"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 font-bold">
-                          {u.name[0]}
+                        <div className="h-10 w-10 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 font-bold overflow-hidden shrink-0">
+                          {u.avatarUrl ? (
+                            <img src={u.avatarUrl} alt={u.name} className="h-full w-full object-cover" />
+                          ) : (
+                            u.name[0]
+                          )}
                         </div>
                         <div className="text-left">
                           <p className="font-bold">{u.name}</p>
@@ -3022,8 +3040,12 @@ export default function App() {
                     <tr key={u.uid} className="hover:bg-zinc-900/30 transition-colors">
                       <td className="p-4">
                         <div className="flex items-center gap-3">
-                          <div className="h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold shrink-0">
-                            {u.name[0]}
+                          <div className="h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden">
+                            {u.avatarUrl ? (
+                              <img src={u.avatarUrl} alt={u.name} className="h-full w-full object-cover" />
+                            ) : (
+                              u.name[0]
+                            )}
                           </div>
                           <div className="flex flex-col">
                             <span className="font-medium leading-none">{u.name}</span>
@@ -3070,8 +3092,12 @@ export default function App() {
                 {allUsers.filter(u => u.role !== 'deleted').map((u) => (
                   <div key={u.uid} className="p-4 flex items-center justify-between hover:bg-zinc-900/30">
                     <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold border border-zinc-700">
-                        {u.name[0]}
+                      <div className="h-10 w-10 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-bold border border-zinc-700 overflow-hidden shrink-0">
+                        {u.avatarUrl ? (
+                          <img src={u.avatarUrl} alt={u.name} className="h-full w-full object-cover" />
+                        ) : (
+                          u.name[0]
+                        )}
                       </div>
                       <div className="space-y-0.5">
                         <p className="font-bold text-white leading-none">{u.name}</p>
@@ -3682,14 +3708,98 @@ export default function App() {
             </div>
 
             <div className="rounded-3xl border border-zinc-900 bg-zinc-900/20 p-8 space-y-8">
-              <div className="flex flex-col items-center gap-4">
-                <div className="h-24 w-24 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500">
-                  <UserIcon size={48} />
+              {/* Profil Fotoğrafı */}
+              <div className="flex flex-col items-center gap-3">
+                <div className="relative group">
+                  {profile?.avatarUrl ? (
+                    <img
+                      src={profile.avatarUrl}
+                      alt={profile.name}
+                      className="h-28 w-28 rounded-full object-cover border-4 border-orange-500/30 shadow-xl"
+                    />
+                  ) : (
+                    <div className="h-28 w-28 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 border-4 border-orange-500/20">
+                      <UserIcon size={52} />
+                    </div>
+                  )}
+                  {/* Upload overlay */}
+                  <button
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={avatarUploading}
+                    className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    {avatarUploading ? (
+                      <div className="h-6 w-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Camera size={24} className="text-white" />
+                    )}
+                  </button>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file || !user) return;
+                      if (file.size > 5 * 1024 * 1024) {
+                        setStatus({ type: 'error', message: 'Fotoğraf en fazla 5MB olabilir.' });
+                        return;
+                      }
+                      setAvatarUploading(true);
+                      try {
+                        const storageRef = ref(storage, `avatars/${user.uid}`);
+                        await uploadBytes(storageRef, file);
+                        const downloadUrl = await getDownloadURL(storageRef);
+                        await updateDoc(doc(db, 'users', user.uid), { avatarUrl: downloadUrl });
+                        setProfile(prev => prev ? { ...prev, avatarUrl: downloadUrl } : prev);
+                        setStatus({ type: 'success', message: 'Profil fotoğrafı güncellendi.' });
+                      } catch (err: any) {
+                        setStatus({ type: 'error', message: 'Fotoğraf yüklenemedi: ' + err.message });
+                      } finally {
+                        setAvatarUploading(false);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
                 </div>
+
                 <div className="text-center">
                   <h3 className="text-2xl font-bold">{profile?.name}</h3>
                   {profile?.title && <p className="text-orange-500 font-bold text-sm uppercase tracking-widest mt-1">{profile.title}</p>}
                   <p className="text-zinc-500 text-xs mt-1">{profile?.role === 'admin' ? 'Yönetici' : 'Personel'}</p>
+                </div>
+
+                {/* Fotoğraf aksiyonları */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={avatarUploading}
+                    className="flex items-center gap-1.5 rounded-xl bg-orange-500/10 px-4 py-2 text-xs font-bold text-orange-500 hover:bg-orange-500/20 transition-colors disabled:opacity-50"
+                  >
+                    <Camera size={13} />
+                    {profile?.avatarUrl ? 'Değiştir' : 'Fotoğraf Ekle'}
+                  </button>
+                  {profile?.avatarUrl && (
+                    <button
+                      onClick={async () => {
+                        if (!user) return;
+                        if (!window.confirm('Profil fotoğrafı silinsin mi?')) return;
+                        try {
+                          const storageRef = ref(storage, `avatars/${user.uid}`);
+                          await deleteObject(storageRef).catch(() => {}); // yoksa hata verme
+                          await updateDoc(doc(db, 'users', user.uid), { avatarUrl: null });
+                          setProfile(prev => prev ? { ...prev, avatarUrl: undefined } : prev);
+                          setStatus({ type: 'success', message: 'Profil fotoğrafı silindi.' });
+                        } catch (err: any) {
+                          setStatus({ type: 'error', message: 'Silinemedi: ' + err.message });
+                        }
+                      }}
+                      className="flex items-center gap-1.5 rounded-xl bg-red-500/10 px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-500/20 transition-colors"
+                    >
+                      <Trash2 size={13} /> Sil
+                    </button>
+                  )}
                 </div>
               </div>
 
