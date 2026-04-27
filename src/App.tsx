@@ -1229,15 +1229,23 @@ export default function App() {
     const auditInfo = `Manuel: ${profile.name}`;
 
     try {
+      const isRemoteOnly = profile.role !== 'admin';
+      const newStatus = isRemoteOnly ? 'pending' : 'success';
+      const isManualEntry = isRemoteOnly ? true : undefined;
+      const remoteNote = isRemoteOnly ? 'Geçmiş Kayıt (Onay Bekliyor)' : undefined;
+
       if (editingLog?.id) {
         await setDoc(doc(db, 'attendance', editingLog.id), {
           ...editingLog,
           timestamp: timestamp,
           type: manualLogType,
           ipAddress: auditInfo,
-          status: 'success',
+          status: newStatus,
+          manualEntry: editingLog.manualEntry !== undefined ? editingLog.manualEntry : isManualEntry,
+          isRemote: editingLog.isRemote !== undefined ? editingLog.isRemote : (isRemoteOnly ? true : undefined),
+          remoteNote: editingLog.remoteNote || remoteNote,
         });
-        setStatus({ type: 'success', message: 'Kayıt güncellendi.' });
+        setStatus({ type: 'success', message: isRemoteOnly ? 'Kayıt güncellendi, onaya gönderildi.' : 'Kayıt güncellendi.' });
       } else {
         await addDoc(collection(db, 'attendance'), {
           userId: targetId,
@@ -1245,9 +1253,20 @@ export default function App() {
           timestamp: timestamp,
           type: manualLogType,
           ipAddress: auditInfo,
-          status: 'success',
+          status: newStatus,
+          manualEntry: isManualEntry,
+          isRemote: isRemoteOnly ? true : undefined,
+          remoteNote: remoteNote,
         });
-        setStatus({ type: 'success', message: 'Kayıt eklendi.' });
+        setStatus({ type: 'success', message: isRemoteOnly ? 'Kayıt eklendi, yönetici onayı bekleniyor.' : 'Kayıt eklendi.' });
+        
+        if (isRemoteOnly) {
+          fetch('/api/notify/checkin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.uid, userName: profile.name, type: manualLogType, isRemote: true, remoteNote: 'Geçmiş Manuel Kayıt Eklendi' })
+          }).catch(() => {});
+        }
       }
       
       // Check for auto-overtime
@@ -4066,19 +4085,20 @@ export default function App() {
               
               <div className="space-y-6 pt-4">
                 {/* Manual Action Button */}
-                <button
-                  onClick={() => {
-                    setEditingLog(null);
-                    setManualLogDate(selectedDayDetails.date);
-                    setManualLogTime(format(new Date(), 'HH:mm'));
-                    setManualLogType('in');
-                    setShowManualLogModal(true);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-500/10 py-4 text-emerald-500 font-bold hover:bg-emerald-500/20 transition-all border border-emerald-500/20 border-dashed"
-                >
-                  <Plus size={20} /> Manuel Hareket Ekle
-                </button>
-
+                {(profile?.role === 'admin' || profile?.canRemoteCheckIn) && (
+                  <button
+                    onClick={() => {
+                      setEditingLog(null);
+                      setManualLogDate(selectedDayDetails.date);
+                      setManualLogTime(format(new Date(), 'HH:mm'));
+                      setManualLogType('in');
+                      setShowManualLogModal(true);
+                    }}
+                    className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-500/10 py-4 text-emerald-500 font-bold hover:bg-emerald-500/20 transition-all border border-emerald-500/20 border-dashed"
+                  >
+                    <Plus size={20} /> Manuel Hareket Ekle
+                  </button>
+                )}
                 {/* Logs Section */}
                 <div className="space-y-3">
                   <h4 className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
