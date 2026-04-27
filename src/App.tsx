@@ -2314,12 +2314,12 @@ export default function App() {
                     {/* Desktop Table View */}
                     <table className="hidden md:table w-full text-left">
                       <tbody className="divide-y divide-zinc-900">
-                        {logs.filter(l => l.userId === user?.uid).length === 0 ? (
+                        {logs.filter(l => l.userId === user?.uid && l.timestamp?.toDate && format(l.timestamp.toDate(), 'yyyy-MM') === selectedMonth).length === 0 ? (
                           <tr>
-                            <td className="p-8 text-center text-zinc-500 text-xs italic">Henüz kayıt bulunmuyor.</td>
+                            <td className="p-8 text-center text-zinc-500 text-xs italic">Bu ay için kayıt bulunmuyor.</td>
                           </tr>
                         ) : (
-                          logs.filter(l => l.userId === user?.uid)
+                          logs.filter(l => l.userId === user?.uid && l.timestamp?.toDate && format(l.timestamp.toDate(), 'yyyy-MM') === selectedMonth)
                             .sort((a,b) => (b.timestamp?.toDate?.()?.getTime() || 0) - (a.timestamp?.toDate?.()?.getTime() || 0))
                             .map((log) => (
                             <tr key={log.id} className="hover:bg-zinc-900/30 transition-colors">
@@ -2351,10 +2351,10 @@ export default function App() {
 
                     {/* Mobile Card View */}
                     <div className="md:hidden divide-y divide-zinc-900">
-                      {logs.filter(l => l.userId === user?.uid).length === 0 ? (
-                        <div className="p-8 text-center text-zinc-500 text-xs italic">Henüz kayıt bulunmuyor.</div>
+                      {logs.filter(l => l.userId === user?.uid && l.timestamp?.toDate && format(l.timestamp.toDate(), 'yyyy-MM') === selectedMonth).length === 0 ? (
+                        <div className="p-8 text-center text-zinc-500 text-xs italic">Bu ay için kayıt bulunmuyor.</div>
                       ) : (
-                        logs.filter(l => l.userId === user?.uid)
+                        logs.filter(l => l.userId === user?.uid && l.timestamp?.toDate && format(l.timestamp.toDate(), 'yyyy-MM') === selectedMonth)
                           .sort((a,b) => (b.timestamp?.toDate?.()?.getTime() || 0) - (a.timestamp?.toDate?.()?.getTime() || 0))
                           .map((log) => (
                           <div key={log.id} className="p-4 flex items-center justify-between hover:bg-zinc-900/30 transition-colors">
@@ -4127,7 +4127,11 @@ export default function App() {
               <div className="mb-6 flex items-center justify-between sticky top-0 bg-zinc-950 py-2 z-10 border-b border-zinc-900">
                 <div>
                   <h3 className="text-xl font-bold">{format(new Date(selectedDayDetails.date), 'd MMMM yyyy', { locale: tr })}</h3>
-                  <p className="text-xs text-zinc-500">{allUsers.find(u => u.uid === selectedDayDetails.userId)?.name} Hareketleri</p>
+                  <p className="text-xs text-zinc-500">
+                    {(allUsers.find(u => u.uid === selectedDayDetails.userId)?.name 
+                      || (profile?.uid === selectedDayDetails.userId ? profile?.name : null)
+                      || 'Personel') + ' Hareketleri'}
+                  </p>
                 </div>
                 <button onClick={() => setSelectedDayDetails(null)} className="rounded-full bg-zinc-900 p-2 text-zinc-500 hover:bg-zinc-800"><X size={20} /></button>
               </div>
@@ -4160,22 +4164,33 @@ export default function App() {
                       logs.filter(l => l.userId === selectedDayDetails.userId && !l.deleted && l.timestamp?.toDate && format(l.timestamp.toDate(), 'yyyy-MM-dd') === selectedDayDetails.date)
                         .sort((a,b) => a.timestamp.toDate() - b.timestamp.toDate())
                         .map(log => (
-                        <div key={log.id} className="flex items-center justify-between p-3 rounded-xl bg-zinc-900/40 border border-zinc-800">
+                        <div key={log.id} className={cn(
+                          "flex items-center justify-between p-3 rounded-xl border",
+                          log.status === 'pending' 
+                            ? "bg-amber-500/5 border-amber-500/20" 
+                            : "bg-zinc-900/40 border-zinc-800"
+                        )}>
                           <div className="flex items-center gap-3">
                             <div className={cn(
                               "p-2 rounded-lg", 
                               log.status === 'error' ? "bg-red-500/10 text-red-500" :
+                              log.status === 'pending' ? "bg-amber-500/10 text-amber-400" :
                               log.type === 'in' ? "bg-emerald-500/10 text-emerald-500" : "bg-orange-500/10 text-orange-500"
                             )}>
-                              {log.status === 'error' ? <ShieldAlert size={14} /> : log.type === 'in' ? <LogIn size={14} /> : <LogOut size={14} />}
+                              {log.status === 'error' ? <ShieldAlert size={14} /> : 
+                               log.status === 'pending' ? <Clock3 size={14} /> :
+                               log.type === 'in' ? <LogIn size={14} /> : <LogOut size={14} />}
                             </div>
                             <div className="min-w-0">
                               <p className="text-sm font-bold truncate">
                                 {format(log.timestamp.toDate(), 'HH:mm')}
+                                {log.status === 'pending' && <span className="ml-2 text-[9px] text-amber-400 font-black uppercase">Onay Bekliyor</span>}
                                 {log.status === 'error' && <span className="ml-2 text-[9px] text-red-500 font-black uppercase">Hata</span>}
                               </p>
                               <p className="text-[10px] text-zinc-500 uppercase truncate">
-                                {log.status === 'error' ? log.errorMessage : (log.type === 'in' ? 'Giriş' : 'Çıkış')}
+                                {log.status === 'error' ? log.errorMessage : 
+                                 log.status === 'pending' ? 'Yönetici onayı bekleniyor' :
+                                 (log.type === 'in' ? 'Giriş' : 'Çıkış')}
                               </p>
                               <p className="text-[9px] text-zinc-600 font-mono truncate">{log.ipAddress}</p>
                             </div>
