@@ -1364,9 +1364,18 @@ export default function App() {
     try {
       let attachmentUrl = '';
       if (reportFile) {
-        const fileRef = ref(storage, `reports/${user.uid}/${Date.now()}_${reportFile.name}`);
-        const snapshot = await uploadBytes(fileRef, reportFile);
-        attachmentUrl = await getDownloadURL(snapshot.ref);
+        if (reportFile.size > 800 * 1024) {
+          setStatus({ type: 'error', message: 'Dosya boyutu çok büyük. Lütfen 800 KB altında bir dosya seçin veya resmi kırpın.' });
+          setUploading(false);
+          return;
+        }
+        
+        attachmentUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error('Dosya okunamadı.'));
+          reader.readAsDataURL(reportFile);
+        });
       }
 
       await addDoc(collection(db, 'leaveRequests'), {
