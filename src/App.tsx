@@ -1212,8 +1212,11 @@ export default function App() {
     if (!targetId || !profile) return;
 
     // Authorization: Admin can do anything. Manager can do for their employees. User can do for themselves.
-    const targetUser = allUsers.find(u => u.uid === targetId);
-    if (!targetUser) return;
+    const targetUser = allUsers.find(u => u.uid === targetId) || (profile.uid === targetId ? profile : null);
+    if (!targetUser) {
+      setStatus({ type: 'error', message: 'Kullanıcı bilgisi bulunamadı.' });
+      return;
+    }
 
     let isAuthorized = profile.role === 'admin' || profile.uid === targetId;
     if (!isAuthorized && targetUser.managerId === profile.uid) {
