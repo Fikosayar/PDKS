@@ -1285,20 +1285,24 @@ export default function App() {
 
   const handleManualLog = async (e: React.FormEvent) => {
     e.preventDefault();
-    const targetId = selectedPersonnelId || selectedDayDetails?.userId;
+    // TargetId: açık modaldan, seçili personelden veya mevcut log'dan al
+    const targetId = selectedDayDetails?.userId || selectedPersonnelId || editingLog?.userId || user?.uid;
     if (!targetId || !profile) return;
 
-    // Authorization: Admin can do anything. Manager can do for their employees. User can do for themselves.
-    const targetUser = allUsers.find(u => u.uid === targetId) || (profile.uid === targetId ? profile : null);
+    // Hedef kullanıcıyı bul: allUsers'da, kendi profilinde veya log'daki userName ile
+    const targetUser: UserProfile | null = 
+      allUsers.find(u => u.uid === targetId) || 
+      (profile.uid === targetId ? profile : null);
+    
     if (!targetUser) {
       setStatus({ type: 'error', message: 'Kullanıcı bilgisi bulunamadı.' });
       return;
     }
 
-    let isAuthorized = profile.role === 'admin' || profile.uid === targetId;
-    if (!isAuthorized && targetUser.managerId === profile.uid) {
-      isAuthorized = true;
-    }
+    // Yetki: admin her şeyi yapabilir, yönetici kendi ekibini, personel sadece kendini
+    const isAuthorized = profile.role === 'admin' || 
+      profile.uid === targetId || 
+      targetUser.managerId === profile.uid;
 
     if (!isAuthorized) {
       setStatus({ type: 'error', message: 'Bu işlemi yapma yetkiniz yok.' });
@@ -4168,10 +4172,18 @@ export default function App() {
               className="relative w-full max-w-md overflow-hidden rounded-3xl border border-zinc-900 bg-zinc-950 p-6 shadow-2xl"
             >
               <div className="mb-6 flex items-center justify-between">
-                <h3 className="text-xl font-bold flex items-center gap-2">
-                  <Clock4 size={24} className="text-orange-500" />
-                  {editingLog ? 'Kaydı Düzenle' : 'Manuel Kayıt Ekle'}
-                </h3>
+                <div>
+                  <h3 className="text-xl font-bold flex items-center gap-2">
+                    <Clock4 size={24} className="text-orange-500" />
+                    {editingLog ? 'Kaydı Düzenle' : 'Manuel Kayıt Ekle'}
+                  </h3>
+                  {/* Hedef kişi adını göster */}
+                  {(() => {
+                    const tid = selectedDayDetails?.userId || selectedPersonnelId || editingLog?.userId;
+                    const tName = tid ? (allUsers.find(u => u.uid === tid)?.name || (profile?.uid === tid ? profile?.name : null)) : null;
+                    return tName ? <p className="text-xs text-zinc-500 mt-0.5">Personel: <span className="text-orange-400 font-bold">{tName}</span></p> : null;
+                  })()}
+                </div>
                 <button onClick={() => setShowManualLogModal(false)} className="text-zinc-500 hover:text-white">
                   <X size={24} />
                 </button>
