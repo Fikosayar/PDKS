@@ -1287,7 +1287,23 @@ export default function App() {
     e.preventDefault();
     // TargetId: açık modaldan, seçili personelden veya mevcut log'dan al
     const targetId = selectedDayDetails?.userId || selectedPersonnelId || editingLog?.userId || user?.uid;
-    if (!targetId || !profile) return;
+    
+    console.log('[handleManualLog] Debug:', {
+      targetId,
+      selectedDayDetails,
+      selectedPersonnelId,
+      editingLogId: editingLog?.id,
+      editingLogUserId: editingLog?.userId,
+      userId: user?.uid,
+      profileRole: profile?.role,
+      allUsersCount: allUsers.length,
+      allUserIds: allUsers.map(u => u.uid),
+    });
+    
+    if (!targetId || !profile) {
+      setStatus({ type: 'error', message: 'Hedef kullanıcı veya profil bilgisi eksik.' });
+      return;
+    }
 
     // Hedef kullanıcıyı bul: allUsers'da, kendi profilinde veya log'daki userName ile
     const targetUser: UserProfile | null = 
@@ -1295,7 +1311,7 @@ export default function App() {
       (profile.uid === targetId ? profile : null);
     
     if (!targetUser) {
-      setStatus({ type: 'error', message: 'Kullanıcı bilgisi bulunamadı.' });
+      setStatus({ type: 'error', message: `Kullanıcı bulunamadı (ID: ${targetId}). allUsers: ${allUsers.length} kişi.` });
       return;
     }
 
@@ -1309,28 +1325,29 @@ export default function App() {
       return;
     }
 
-    const timestamp = new Date(`${manualLogDate}T${manualLogTime}`);
+    const timestamp = new Date(`${manualLogDate}T${manualLogTime}:00`);
+    if (isNaN(timestamp.getTime())) {
+      setStatus({ type: 'error', message: 'Geçersiz tarih veya saat.' });
+      return;
+    }
     const auditInfo = `Manuel: ${profile.name}`;
 
     try {
-      const isRemoteOnly = profile.role !== 'admin';
-      const newStatus = isRemoteOnly ? 'pending' : 'success';
-      const isManualEntry = isRemoteOnly ? true : undefined;
-      const remoteNote = isRemoteOnly ? 'Geçmiş Kayıt (Onay Bekliyor)' : undefined;
+      const isAdminOrManager = profile.role === 'admin' || targetUser.managerId === profile.uid;
+      const newStatus = isAdminOrManager ? 'success' : 'pending';
 
       if (editingLog?.id) {
-        await setDoc(doc(db, 'attendance', editingLog.id), {
-          ...editingLog,
+        // Mevcut kaydı güncelle
+        await updateDoc(doc(db, 'attendance', editingLog.id), {
           timestamp: timestamp,
           type: manualLogType,
           ipAddress: auditInfo,
           status: newStatus,
-          manualEntry: editingLog.manualEntry !== undefined ? editingLog.manualEntry : isManualEntry,
-          isRemote: editingLog.isRemote !== undefined ? editingLog.isRemote : (isRemoteOnly ? true : undefined),
-          remoteNote: editingLog.remoteNote || remoteNote,
+          ...(isAdminOrManager ? { manualEntry: true, isRemote: false, remoteNote: null } : {}),
         });
-        setStatus({ type: 'success', message: isRemoteOnly ? 'Kayıt güncellendi, onaya gönderildi.' : 'Kayıt güncellendi.' });
+        setStatus({ type: 'success', message: 'Kayıt güncellendi.' });
       } else {
+        // Yeni kayıt ekle
         await addDoc(collection(db, 'attendance'), {
           userId: targetId,
           userName: targetUser.name,
@@ -1338,13 +1355,13 @@ export default function App() {
           type: manualLogType,
           ipAddress: auditInfo,
           status: newStatus,
-          manualEntry: isManualEntry,
-          isRemote: isRemoteOnly ? true : undefined,
-          remoteNote: remoteNote,
+          manualEntry: true,
+          isRemote: !isAdminOrManager,
+          ...(isAdminOrManager ? {} : { remoteNote: 'Geçmiş Kayıt (Onay Bekliyor)' }),
         });
-        setStatus({ type: 'success', message: isRemoteOnly ? 'Kayıt eklendi, yönetici onayı bekleniyor.' : 'Kayıt eklendi.' });
+        setStatus({ type: 'success', message: isAdminOrManager ? 'Kayıt eklendi.' : 'Kayıt eklendi, yönetici onayı bekleniyor.' });
         
-        if (isRemoteOnly) {
+        if (!isAdminOrManager) {
           fetch('/api/notify/checkin', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1353,16 +1370,16 @@ export default function App() {
         }
       }
       
-      // Check for auto-overtime
+      // Çıkış ise otomatik mesai kontrolü
       if (manualLogType === 'out') {
         await checkAndCreateAutoOvertime(targetId, targetUser.name, timestamp, 'out');
       }
 
       setShowManualLogModal(false);
       setEditingLog(null);
-    } catch (error) {
-      console.error("Manual log error:", error);
-      setStatus({ type: 'error', message: 'Kayıt işlemi başarısız.' });
+    } catch (error: any) {
+      console.error('Manual log error:', error);
+      setStatus({ type: 'error', message: `Kayıt başarısız: ${error?.message || error?.code || 'Bilinmeyen hata'}` });
     }
   };
 
