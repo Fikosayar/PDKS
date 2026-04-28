@@ -1315,13 +1315,18 @@ export default function App() {
       return;
     }
 
-    // Yetki: admin her şeyi yapabilir, yönetici kendi ekibini, personel sadece kendini
-    const isAuthorized = profile.role === 'admin' || 
-      profile.uid === targetId || 
-      targetUser.managerId === profile.uid;
+    // Yetki kuralları:
+    // - 'admin' rolü: herkese yapabilir
+    // - 'mudur' / 'takim_lideri': sadece managerId'si kendi uid'i olan personele
+    // - Diğer roller: sadece kendi kaydına
+    const isSystemAdmin = profile.role === 'admin';
+    const isManagerOf = targetUser.managerId === profile.uid;
+    const isSelf = profile.uid === targetId;
+    
+    const isAuthorized = isSystemAdmin || isManagerOf || isSelf;
 
     if (!isAuthorized) {
-      setStatus({ type: 'error', message: 'Bu işlemi yapma yetkiniz yok.' });
+      setStatus({ type: 'error', message: 'Bu personelin kaydını düzenleme yetkiniz yok.' });
       return;
     }
 
@@ -4535,21 +4540,29 @@ export default function App() {
               </div>
               
               <div className="space-y-6 pt-4">
-                {/* Manual Action Button */}
-                {(profile?.role === 'admin' || profile?.canRemoteCheckIn) && (
-                  <button
-                    onClick={() => {
-                      setEditingLog(null);
-                      setManualLogDate(selectedDayDetails.date);
-                      setManualLogTime(format(new Date(), 'HH:mm'));
-                      setManualLogType('in');
-                      setShowManualLogModal(true);
-                    }}
-                    className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-500/10 py-4 text-emerald-500 font-bold hover:bg-emerald-500/20 transition-all border border-emerald-500/20 border-dashed"
-                  >
-                    <Plus size={20} /> Manuel Hareket Ekle
-                  </button>
-                )}
+                {/* Manuel Hareket Ekle: admin veya bu günün sahibinin yöneticisi */}
+                {(() => {
+                  const dayUserId = selectedDayDetails.userId;
+                  const dayUser = allUsers.find(u => u.uid === dayUserId);
+                  const canAddManual = profile?.role === 'admin' ||
+                    dayUser?.managerId === profile?.uid ||
+                    (dayUserId === profile?.uid && profile?.canRemoteCheckIn);
+                  if (!canAddManual) return null;
+                  return (
+                    <button
+                      onClick={() => {
+                        setEditingLog(null);
+                        setManualLogDate(selectedDayDetails.date);
+                        setManualLogTime(format(new Date(), 'HH:mm'));
+                        setManualLogType('in');
+                        setShowManualLogModal(true);
+                      }}
+                      className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-500/10 py-4 text-emerald-500 font-bold hover:bg-emerald-500/20 transition-all border border-emerald-500/20 border-dashed"
+                    >
+                      <Plus size={20} /> Manuel Hareket Ekle
+                    </button>
+                  );
+                })()}
                 {/* Logs Section */}
                 <div className="space-y-3">
                   <h4 className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2">
@@ -4593,7 +4606,7 @@ export default function App() {
                               <p className="text-[9px] text-zinc-600 font-mono truncate">{log.ipAddress}</p>
                             </div>
                           </div>
-                          {profile?.role === 'admin' && (
+                          {(profile?.role === 'admin' || allUsers.find(u => u.uid === log.userId)?.managerId === profile?.uid) && (
                             <div className="flex items-center gap-1">
                               <button onClick={() => {
                                 setEditingLog(log);
